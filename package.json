@@ -1,0 +1,33 @@
+{
+	"name": "catmemes-standalone",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"start": "node --env-file-if-exists=.env src/server/index.ts",
+		"dev": "concurrently \"npm run watch\" \"node --watch --env-file-if-exists=.env src/server/index.ts\"",
+		"build": "esbuild src/page/index.ts --bundle --sourcemap --outfile=public/index.js",
+		"watch": "esbuild src/page/index.ts --bundle --sourcemap --watch --outfile=public/index.js",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"db:import": "node --env-file-if-exists=.env scripts/import-sql.ts",
+		"media:pull": "node --env-file-if-exists=.env scripts/pull-media.ts"
+	},
+	"dependencies": {
+		"@hono/node-server": "^1.19.0",
+		"hono": "^4.9.0",
+		"kysely": "^0.28.5",
+		"rampike": "^0.0.13"
+	},
+	"devDependencies": {
+		"@types/node": "^24.0.0",
+		"concurrently": "^9.2.1",
+		"esbuild": "^0.25.9",
+		"typescript": "^5.9.2"
+	},
+	"allowScripts": {
+		"esbuild@0.25.12": true
+	}
+}

@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<!-- <meta name="viewport" content="width=device-width; initial-scale=1; maximum-scale=1; user-scalable=0;"/> -->
+		<title>Мемы про котов (по искать)</title>
+		<link rel="icon" href="/favicon.png" />
+		<link rel="preconnect" href="https://fonts.googleapis.com">
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+		<link href="https://fonts.googleapis.com/css2?family=Raleway:wght@400..500&display=swap" rel="stylesheet">
+		<link rel="stylesheet" href="styles.css"/>
+		<script type="module" src="index.js"></script>
+	</head>
+	<body>
+		<template id="t-post">
+			<article class="post">
+				<div class="post-images"></div>
+				<div class="post-caption"></div>
+				<div class="post-tags"></div>
+				<input type="text" id="dash-login" placeholder="add tag" list="list-tags"></input>
+				<a class="post-source"></a>
+			</article>
+		</template>
+
+		<div class="side">
+			<div class="tab-buttons">
+				<button class="butt" data-for="rp-tabs-main" data-tab="posts">посты</button>
+				<button class="butt" data-for="rp-tabs-main" data-tab="tags">теги</button>
+			</div>
+			<div class="dashboard side">
+				<rampike-tabs id="rp-tabs-dash" tab="vibe">
+					<rampike-tab key="vibe">
+						<button id="dash-check" class="wide butt">редактировать</button>
+					</rampike-tab>
+					<rampike-tab key="signin">
+						<input type="text" id="dash-login" placeholder="login"></input>
+						<input type="password" id="dash-pass" placeholder="password"></input>
+						<button id="dash-signin" class="wide butt">sign in</button>
+					</rampike-tab>
+					<rampike-tab key="admin">
+						<div>Change password</div>
+						<input type="password" id="dash-change-field" placeholder="new password"></input>
+						<button id="dash-change-button" class="wide butt">change password</button>
+						<div>Session list</div>
+						<div class="dash-session-list"></div>
+					</rampike-tab>
+				</rampike-tabs>
+			</div>
+		</div>
+		<main class="main">
+			<rampike-tabs id="rp-tabs-main" tab="posts">
+				<rampike-tab key="posts">
+					<div class="search-row">
+						<input type="text" id="search-bar" list="list-tags" placeholder="поиск"></input>
+						<button class="butt" id="search-button" class="wide">искатб</button>
+						<button class="butt" id="search-reset" class="wide">сброс</button>
+					</div>
+					<rampike-pages id="rp-pages" class="tab-buttons pagination"></rampike-pages>
+					<div class="post-list"></div>
+				</rampike-tab>
+				<rampike-tab key="tags">
+					<div class="tags-list"></div>
+				</rampike-tab>
+			</rampike-tabs>
+		</main>
+	</body>
+</html>

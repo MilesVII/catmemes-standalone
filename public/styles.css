@@ -1,0 +1,233 @@
+
+:root {
+	--font-main: normal 400 16px/20px "Raleway";
+	--font-butt: normal 400 20px/24px "Raleway";
+	--font-fild: normal 400 24px/30px "Raleway";
+
+	--color-back: #F5F5F5;
+	--color-fore: #FFFFFF;
+	--color-line: #EBEBEB;
+	--color-main: #2F7FFF;
+	--color-acnt: #2F7FFF;
+	--color-text: #232323;
+	--color-link: #4C7BBC;
+
+	--padding-tag: 4px 12px;
+	--padding-button: 12px 16px;
+	--padding-card: 16px;
+	--padding-input: 12px;
+
+	--gap-layout: 24px;
+	--gap-main: 20px;
+	--gap-list: 8px;
+	--gap: 12px;
+
+	--radius-tag: 8px;
+	--radius-button: 12px;
+	--radius-card: 12px;
+
+	--line: 2px;
+
+	background-color: var(--color-back);
+	color-scheme: dark;
+
+	font: var(--font-main);
+	color: var(--color-text);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+#app, body, html {
+	margin: 0;
+	border: 0;
+	padding: 0;
+}
+
+.strip-defaults, button, textarea, input {
+	appearance: none;
+	background: none;
+	border: none;
+	color: inherit;
+	font: inherit;
+	outline: inherit;
+}
+
+/* desktop */
+@media screen and (min-aspect-ratio: 1/1.42) {
+	body {
+		width: 100%;
+		display: grid;
+		grid-template-columns: min(300px, 20vw) auto;
+		gap: var(--gap-layout);
+		padding: var(--gap-layout);
+	}
+
+	.post-list {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: var(--gap);
+		align-items: stretch;
+	}
+
+	.mobile-only {
+		display: hidden;
+	}
+}
+/* mobile */
+@media screen and (max-aspect-ratio: 1/1.42) {
+	body {
+		width: 100%;
+		display: flex;
+		flex-flow: column nowrap;
+		align-items: stretch;
+		gap: var(--gap-layout);
+		padding: var(--gap-layout);
+	}
+
+	.post-list {
+		display: flex;
+		flex-flow: column nowrap;
+		align-items: stretch;
+		gap: var(--gap);
+	}
+
+	.desktop-only {
+		display: hidden;
+	}
+}
+
+img {
+	display: block;
+	max-width: 100%;
+	max-height: 32vh;
+}
+hr {
+	width: 100%;
+	color: var(--color-line);
+}
+textarea, input[type="text"], input[type="password"] {
+	background-color: var(--color-fore);
+	border-radius: var(--radius-button);
+	padding: var(--padding-input);
+	border: var(--line) solid transparent;
+	max-width: 100%;
+	width: 100%;
+}
+textarea:focus, input[type="text"]:focus, input[type="password"]:focus {
+	border-color: var(--color-acnt);
+}
+a, a:visited {
+	color: var(--color-link);
+}
+
+.butt {
+	background: var(--color-main);
+	font: var(--font-butt);
+	color: white;
+	padding: var(--padding-button);
+	border-radius: var(--radius-button);
+	border: var(--line) solid transparent;
+	cursor: pointer;
+}
+/* .butt:hover {
+	background: var(--color-fore);
+} */
+.butt:focus {
+	border-color: var(--color-line);
+}
+.butt:disabled {
+	cursor: progress;
+}
+
+.side {
+	display: flex;
+	flex-flow: column nowrap;
+	gap: var(--gap);
+}
+
+.main {
+	display: flex;
+	flex-flow: column nowrap;
+	gap: var(--gap-main);
+}
+
+.tab-buttons {
+	display: flex;
+	flex-flow: row wrap;
+	align-items: baseline;
+	justify-content: center;
+	gap: var(--gap-list);
+}
+
+.search-row {
+	display: grid;
+	grid-template-columns: auto repeat(2, min-content);
+	gap: var(--gap-list);
+}
+
+.post {
+	width: 100%;
+	padding: var(--padding-card);
+	gap: var(--gap);
+	background-color: var(--color-fore);
+	border-radius: var(--radius-card);
+	display: flex;
+	flex-flow: column nowrap;
+}
+.post img {
+	border-radius: var(--radius-card);
+}
+.post-images {
+	width: 100%;
+	display: grid;
+	grid-template-columns: repeat(min(var(--media-count), 3), auto);
+	justify-items: center;
+	align-items: center;
+	gap: var(--gap-list);
+}
+.post-caption {
+	font: var(--font-butt);
+	white-space: break-spaces;
+}
+.post-tags {
+	width: 100%;
+	display: flex;
+	flex-flow: row wrap;
+	gap: var(--gap);
+	margin-top: auto;
+}
+.post-tags > * {
+	background-color: var(--color-main);
+}
+
+.tags-list {
+	display: flex;
+	flex-flow: row wrap;
+	align-items: baseline;
+	justify-content: center;
+	gap: var(--gap-list);
+}
+
+.wide {
+	width: 100%;
+}
+
+.dash-session-list {
+	display: contents;
+}
+
+.pagination > *[data-current] {
+	background: var(--color-acnt);
+	border-color: var(--color-acnt);
+	color: var(--color-back);
+}
+
+.tag, .pagination > button {
+	background-color: var(--color-fore);
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-tag);
+	padding: var(--padding-tag);
+	cursor: pointer;
+}

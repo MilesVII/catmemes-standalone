@@ -1,0 +1,23 @@
+[Unit]
+Description=catmemes (Hono + SQLite)
+After=network.target
+
+[Service]
+Type=simple
+User=catmemes
+Group=catmemes
+WorkingDirectory=/opt/catmemes
+EnvironmentFile=/opt/catmemes/.env
+ExecStart=/usr/bin/node src/server/index.ts
+Restart=on-failure
+RestartSec=3
+
+# Hardening: the service only needs to write its own data directory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/catmemes/data
+
+[Install]
+WantedBy=multi-user.target

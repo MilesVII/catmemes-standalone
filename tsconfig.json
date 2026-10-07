@@ -1,0 +1,22 @@
+{
+	"compilerOptions": {
+		"target": "es2022",
+		"lib": ["es2022"],
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"types": ["node"],
+
+		"strict": true,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+
+		/* Node 24 runs the .ts sources directly (type stripping), so every
+		   relative import carries its .ts extension and only erasable syntax
+		   is allowed. */
+		"allowImportingTsExtensions": true,
+		"erasableSyntaxOnly": true,
+		"verbatimModuleSyntax": true
+	},
+	"include": ["src/server/**/*.ts", "scripts/**/*.ts"]
+}
