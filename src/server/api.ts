@@ -252,29 +252,38 @@ async function listPosts(state: State, page: number, search?: number | string, o
 		.executeTakeFirst();
 	const count = countRow?.total ?? 0
 
+	// The page is picked first (straight off the "posts-order" index) and only
+	// its posts are joined with tags; grouping before the limit would aggregate
+	// every post in the table on each request.
 	// Single-quoted key names: Node's bundled SQLite is built with SQLITE_DQS=0,
 	// so double-quoted strings are identifiers only (D1 tolerated them).
 	const rows = await db
-		.selectFrom("posts")
-		.leftJoin("pairs", "pairs.post", "posts.id")
+		.selectFrom(eb => eb
+			.selectFrom("posts")
+			.where(filter)
+			.select(["posts.id", "posts.time", "posts.caption", "posts.media", "posts.source"])
+			.orderBy("posts.time", "desc")
+			.orderBy("posts.id", "desc") // must match the ordering in recalculateCoverage
+			.limit(POSTS_PER_PAGE)
+			.offset(page * POSTS_PER_PAGE)
+			.as("p")
+		)
+		.leftJoin("pairs", "pairs.post", "p.id")
 		.leftJoin("tags", "tags.id", "pairs.tag")
-		.where(filter)
 		.select([
-			"posts.id",
-			"posts.caption",
-			"posts.media",
-			"posts.source",
+			"p.id",
+			"p.caption",
+			"p.media",
+			"p.source",
 			sql<string>`
 				json_group_array(
 					json_object('tagId', tags.id, 'tagName', tags.name)
 				)
 			`.as("tags")
 		])
-		.groupBy("posts.id")
-		.limit(POSTS_PER_PAGE)
-		.offset(page * POSTS_PER_PAGE)
-		.orderBy("posts.time", "desc")
-		.orderBy("posts.id", "desc") // must match the ordering in computeCoverage
+		.groupBy("p.id")
+		.orderBy("p.time", "desc")
+		.orderBy("p.id", "desc")
 		.execute();
 
 	const suggestions = await suggestionsFor(state, rows.map(r => r.id), admin);

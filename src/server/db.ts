@@ -85,6 +85,8 @@ export async function ensureSchema(db: Kysely<Database>) {
 	}
 	await sql`CREATE INDEX IF NOT EXISTS "pairs-post" ON "pairs" ("post")`.execute(db);
 	await sql`CREATE INDEX IF NOT EXISTS "pairs-tag" ON "pairs" ("tag")`.execute(db);
+	// Feed order (time desc, id desc): lets a page be read without sorting every post.
+	await sql`CREATE INDEX IF NOT EXISTS "posts-order" ON "posts" ("time", "id")`.execute(db);
 
 	// Tag suggestions. Created on every start so existing databases pick them up.
 	await db.schema
@@ -110,6 +112,8 @@ export async function ensureSchema(db: Kysely<Database>) {
 		.addUniqueConstraint("suggestion-unique", ["post", "name"])
 		.execute();
 	await sql`CREATE INDEX IF NOT EXISTS "suggestions-suggester" ON "suggestions" ("suggester")`.execute(db);
+	// Tag search and the pending counts in the tag list go by name.
+	await sql`CREATE INDEX IF NOT EXISTS "suggestions-name" ON "suggestions" ("name")`.execute(db);
 
 	await db.schema
 		.createTable("votes")
