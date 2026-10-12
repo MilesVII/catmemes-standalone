@@ -130,7 +130,7 @@ export async function changePassword(newPassword: string) {
 export type AttachError = "invalid" | "nopost" | "unauthorized" | "network";
 export async function attachTag(post: string, tag: string): Promise<Result<true, AttachError>> {
 	const result = await api("/api/post/attach", { post, tag });
-	if (result.success === true) return result.value;
+	if (result.success === true) return result;
 	const unauthorized = typeof result.error === "string" && result.error.startsWith("unauthorized");
 	return { success: false, error: unauthorized ? "unauthorized" : "network" };
 }
