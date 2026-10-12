@@ -11,7 +11,7 @@
 		"dev": "concurrently \"npm run watch\" \"node --watch --env-file-if-exists=.env src/server/index.ts\"",
 		"build": "esbuild src/page/index.ts --bundle --sourcemap --outfile=public/index.js",
 		"watch": "esbuild src/page/index.ts --bundle --sourcemap --watch --outfile=public/index.js",
-		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json && tsc -p src/page/tsconfig.json",
 		"backup": "node --env-file-if-exists=.env scripts/backup.ts",
 		"restore": "node --env-file-if-exists=.env scripts/restore.ts"
 	},

@@ -342,8 +342,15 @@ async function recalculateCoverage(db: Kysely<Database>): Promise<CoverageSnapsh
 	return snapshot;
 }
 
-async function attachTag({ db }: State, post: string, tag: string) {
+type AttachError = "invalid" | "nopost";
+
+async function attachTag({ db }: State, post: string, tag: string): Promise<Result<true, AttachError>> {
 	const tagSanitized = tag.trim().toLowerCase();
+	if (tagSanitized.length === 0 || tagSanitized.length > TAG_MAX_LENGTH) return { success: false, error: "invalid" };
+	// Checked up front: a new tag row must not be left behind for a post that does not exist.
+	const postRow = await db.selectFrom("posts").select("id").where("id", "=", post).executeTakeFirst();
+	if (!postRow) return { success: false, error: "nopost" };
+
 	let id = await db
 		.selectFrom("tags")
 		.select("id")
@@ -354,8 +361,7 @@ async function attachTag({ db }: State, post: string, tag: string) {
 		const newTag = await db
 			.insertInto("tags")
 			.values({ name: tagSanitized })
-			.executeTakeFirst();
-		if (typeof newTag.insertId !== "bigint") return;
+			.executeTakeFirstOrThrow();
 		id = { id: Number(newTag.insertId) };
 	}
 	const paired = await db
@@ -375,6 +381,7 @@ async function attachTag({ db }: State, post: string, tag: string) {
 		.where("post", "=", post)
 		.where("name", "=", tagSanitized)
 		.execute();
+	return { success: true, value: true };
 }
 
 async function untag({ db }: State, post: string, tag: number) {
@@ -641,8 +648,7 @@ async function approveSuggestion(state: State, id: number): Promise<Result<true,
 		if (!suggestion) return { success: false, error: "notfound" };
 
 		// attachTag also deletes the suggestion; its votes go with it (on delete cascade).
-		await attachTag({ ...state, db: trx }, suggestion.post, suggestion.name);
-		return { success: true, value: true };
+		return await attachTag({ ...state, db: trx }, suggestion.post, suggestion.name);
 	});
 }
 

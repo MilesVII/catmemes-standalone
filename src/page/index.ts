@@ -1,4 +1,4 @@
-import { attachTag, Post, posts, tags, untag } from "./api";
+import { AttachError, attachTag, Post, posts, tags, untag } from "./api";
 import { define as defineTabs, RampikeTabs } from "./components/tabs";
 import { define as definePages, RampikePagination } from "./components/pagination";
 import { State } from "./types";
@@ -262,6 +262,22 @@ function rerenderPosts() {
 		.forEach(card => card.rampike.render());
 }
 
+const ATTACH_ERRORS: Record<AttachError, string> = {
+	invalid: "пустой или слишком длинный тег",
+	nopost: "пост не найден",
+	unauthorized: "сессия истекла, войдите заново",
+	network: "не получилось, попробуйте ещё раз"
+};
+
+/** Admin: tags the post right away. Returns an error message, or null on success. */
+async function submitTag(state: State, post: string, tag: string): Promise<string | null> {
+	const result = await attachTag(post, tag);
+	if (result.success === false) return ATTACH_ERRORS[result.error];
+	updateTags(state);
+	updatePage(state);
+	return null;
+}
+
 function makePost(state: State, post: Post) {
 	const postTemplate = document.querySelector<HTMLTemplateElement>("template#t-post")!;
 	let adderListenerAttached = false;
@@ -321,20 +337,15 @@ function makePost(state: State, post: Post) {
 				const value = adder.value.trim();
 				if (value.length === 0) return;
 				adder.disabled = true;
-				if (state.auth) {
-					await attachTag(params.id, value);
-					adder.disabled = false;
-					updateTags(state);
-					updatePage(state);
+				const error = state.auth
+					? await submitTag(state, params.id, value)
+					: await submitSuggestion(state, params.id, value);
+				adder.disabled = false;
+				if (error) {
+					adder.setCustomValidity(error);
+					adder.reportValidity();
 				} else {
-					const error = await submitSuggestion(state, params.id, value);
-					adder.disabled = false;
-					if (error) {
-						adder.setCustomValidity(error);
-						adder.reportValidity();
-					} else {
-						adder.value = "";
-					}
+					adder.value = "";
 				}
 			});
 			adderListenerAttached = true;

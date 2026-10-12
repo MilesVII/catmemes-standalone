@@ -69,7 +69,7 @@ export function attachSuggest(state: State, h: Hooks) {
 		toggleButton.disabled = false;
 		if (!result) {
 			showInfo(ERRORS.network);
-		} else if (result.success) {
+		} else if (result.success === true) {
 			state.suggester = { expiry: result.value.expiry };
 			setMode(state, true);
 			// The token cookie changes which suggestions count as "mine".
@@ -129,7 +129,7 @@ function expire(state: State) {
 /** Submits the post card's tag input as a suggestion. Returns an error message or null. */
 export async function submitSuggestion(state: State, post: string, tag: string): Promise<string | null> {
 	const result = await suggestAdd(post, tag);
-	if (result.success) {
+	if (result.success === true) {
 		hooks.refresh();
 		hooks.refreshTags();
 		return null;

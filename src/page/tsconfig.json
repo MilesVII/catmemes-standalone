@@ -1,9 +1,13 @@
 {
 	"compilerOptions": {
-		"target": "es2021",
-		/* Specify a set of bundled library declaration files that describe the target runtime environment. */
-		"lib": ["dom"],
-		"module": "nodenext",
-		"moduleResolution": "nodenext",
-	}
+		/* The page is bundled by esbuild (npm run build), so imports resolve the
+		   way a bundler does: no file extensions needed. */
+		"target": "es2022",
+		"lib": ["dom", "dom.iterable", "es2022"],
+		"module": "preserve",
+		"moduleResolution": "bundler",
+		"noEmit": true,
+		"skipLibCheck": true
+	},
+	"include": ["./**/*.ts"]
 }

@@ -6,7 +6,9 @@ async function api(
 ): Promise<
 	Result<any, any>
 > {
-	const response = await fetch(endpoint, { method: "POST", body: JSON.stringify(payload) });
+	const sent = await nothrow(() => fetch(endpoint, { method: "POST", body: JSON.stringify(payload) }));
+	if (!sent.success) return sent; // offline, DNS, connection reset
+	const response = sent.value;
 	if (response.ok) {
 		const result = await nothrow(async () => await response.json());
 		if (!result.success) return result;
@@ -125,8 +127,12 @@ export async function changePassword(newPassword: string) {
 	return await api("/api/user/change", { newPassword });
 }
 
-export async function attachTag(post: string, tag: string) {
-	return await api("/api/post/attach", { post, tag });
+export type AttachError = "invalid" | "nopost" | "unauthorized" | "network";
+export async function attachTag(post: string, tag: string): Promise<Result<true, AttachError>> {
+	const result = await api("/api/post/attach", { post, tag });
+	if (result.success === true) return result.value;
+	const unauthorized = typeof result.error === "string" && result.error.startsWith("unauthorized");
+	return { success: false, error: unauthorized ? "unauthorized" : "network" };
 }
 
 export async function untag(post: string, tag: number) {
