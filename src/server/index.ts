@@ -165,9 +165,8 @@ app.post("*", async c => {
 				? params.search
 				: undefined;
 			const result = await routes[route](state, params.page, search, {
-				approvedOnly: params.approved === true,
 				suggested: params.suggested === true,
-				coverage: params.coverage === true
+				recalculateCoverage: params.recalculateCoverage === true
 			});
 			return c.json(result);
 		}

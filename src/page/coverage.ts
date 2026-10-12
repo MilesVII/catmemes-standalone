@@ -1,4 +1,5 @@
 import { mudcrack } from "rampike";
+import { CoverageSnapshot } from "./api";
 
 /** Pages per column, like weekdays in a contribution graph. */
 const COLUMN_HEIGHT = 10;
@@ -10,28 +11,33 @@ function level(tagged: number, total: number) {
 	return Math.min(3, 1 + Math.floor((tagged / total) * 3));
 }
 
+const formatDate = (ms: number) =>
+	new Date(ms).toLocaleString("ru", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
 /**
- * Fills `.coverage-wrap` with one cell per page. `tagged[i]` is the number of
- * posts with at least one tag on page i; the last page may be partial.
+ * Fills `.coverage-wrap` with one cell per page of the unfiltered list.
+ * `current` is the highlighted page, or null while a filter is active
+ * (the snapshot's pages don't line up with a filtered pager).
  */
 export function renderCoverage(
-	tagged: number[] | undefined,
-	count: number,
-	perPage: number,
-	current: number,
+	snapshot: CoverageSnapshot | null,
+	current: number | null,
 	pick: (page: number) => void
 ) {
 	const wrap = document.querySelector<HTMLElement>(".coverage-wrap");
 	const grid = document.querySelector<HTMLElement>(".coverage");
 	if (!wrap || !grid) return;
 
-	wrap.hidden = tagged === undefined || tagged.length === 0;
-	if (tagged === undefined || tagged.length === 0) return;
+	wrap.hidden = snapshot === null || snapshot.tagged.length === 0;
+	if (snapshot === null || snapshot.tagged.length === 0) return;
+
+	const { tagged, count, perPage } = snapshot;
+	const pageSize = (page: number) => Math.min(perPage, count - page * perPage);
 
 	grid.style.setProperty("--rows", `${COLUMN_HEIGHT}`);
 	grid.innerHTML = "";
 	grid.append(...tagged.map((n, page) => {
-		const total = Math.min(perPage, count - page * perPage);
+		const total = pageSize(page);
 		const attributes: Record<string, string> = {
 			title: `стр. ${page + 1}: ${n} из ${total} с тегами`,
 			"aria-label": `страница ${page + 1}, ${n} из ${total} с тегами`,
@@ -48,7 +54,9 @@ export function renderCoverage(
 	const summary = document.querySelector<HTMLElement>(".coverage-summary");
 	if (summary) {
 		const sum = tagged.reduce((a, b) => a + b, 0);
-		const full = tagged.filter((n, page) => level(n, Math.min(perPage, count - page * perPage)) === 4).length;
-		summary.textContent = `${sum} of ${count} posts tagged, ${full} of ${tagged.length} pages complete`;
+		const full = tagged.filter((n, page) => level(n, pageSize(page)) === 4).length;
+		summary.textContent =
+			`с тегами ${sum} из ${count} постов, полностью размечено ${full} из ${tagged.length} стр.` +
+			` · обновлено ${formatDate(snapshot.computedAt)}`;
 	}
 }

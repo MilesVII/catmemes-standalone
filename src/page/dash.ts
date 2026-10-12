@@ -3,8 +3,14 @@ import { changePassword, Sessions, signin, signout, suggestIssue, vibecheck } fr
 import { RampikeTabs } from "./components/tabs";
 import { State } from "./types";
 
-/** `reload(true)` goes back to page 1, `reload(false)` re-fetches the current page. */
-export function attachDash(state: State, reload: (firstPage: boolean) => void) {
+type DashHooks = {
+	/** `reload(true)` goes back to page 1, `reload(false)` re-fetches the current page. */
+	reload: (firstPage: boolean) => void,
+	/** Recomputes the tag coverage snapshot shown to everyone. */
+	recalculateCoverage: () => Promise<void>
+};
+
+export function attachDash(state: State, { reload, recalculateCoverage }: DashHooks) {
 	const dashTabs =        document.querySelector<RampikeTabs>("#rp-tabs-dash")
 	const vibecheckButton = document.querySelector<HTMLButtonElement>("#dash-check");
 	const loginField =      document.querySelector<HTMLInputElement>("#dash-login");
@@ -55,9 +61,7 @@ export function attachDash(state: State, reload: (firstPage: boolean) => void) {
 		changePassword(changeField.value).then(() => dashTabs.tab = "signin");
 		state.auth = false;
 		state.suggestedOnly = false;
-		state.coverage = false;
 		suggestedButton.removeAttribute("data-active");
-		coverageButton.removeAttribute("data-active");
 		reload(false);
 	});
 
@@ -66,10 +70,10 @@ export function attachDash(state: State, reload: (firstPage: boolean) => void) {
 		suggestedButton.toggleAttribute("data-active", state.suggestedOnly);
 		reload(true);
 	});
-	coverageButton.addEventListener("click", () => {
-		state.coverage = !state.coverage;
-		coverageButton.toggleAttribute("data-active", state.coverage);
-		reload(false);
+	coverageButton.addEventListener("click", async () => {
+		coverageButton.disabled = true;
+		await recalculateCoverage();
+		coverageButton.disabled = false;
 	});
 	issueButton.addEventListener("click", async () => {
 		issueButton.disabled = true;

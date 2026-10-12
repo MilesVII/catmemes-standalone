@@ -21,7 +21,7 @@ work as they are.
 src/server/   Hono app, routes (api.ts is the worker's api.ts verbatim), node:sqlite adapter
 src/page/     frontend, copied from the worker project unchanged
 public/       index.html, styles.css, favicon.png (+ built index.js)
-scripts/      one-off migration helpers
+scripts/      backup and restore
 deploy/       systemd unit and nginx server block
 ```
 
@@ -43,27 +43,6 @@ npm start                # http://127.0.0.1:3000
 On first start with no database the schema is created along with the user
 `admin` with an empty password (same as the worker's `create` migration).
 Sign in, then change it from the dashboard.
-
-## Migrating from Cloudflare
-
-1. Export D1 and load it (the dump must go into a fresh database):
-
-   ```bash
-   wrangler d1 export gatos --remote --output=backup.sql   # in the worker project
-   npm run db:import -- ../backup.sql                      # add --replace to overwrite
-   ```
-
-2. Pull media from the still-running worker into `MEDIA_DIR` (resumable):
-
-   ```bash
-   npm run media:pull -- https://catmemes.<account>.workers.dev
-   ```
-
-   Alternatively `rclone sync` the R2 bucket straight into `MEDIA_DIR`; keys
-   map 1:1 to file names.
-
-3. Point the feeder at the new host and give it the same `x-feed-token` value
-   you put into `FEED_TOKEN`.
 
 ## Ubuntu VPS deployment
 
@@ -97,9 +76,39 @@ sudo apt-get install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d your.domain
 ```
 
-Back up `data/` (the SQLite file plus `media/`). SQLite runs in WAL mode, so
-copy the database with `sqlite3 data/gatos.db ".backup backup.db"` rather than
-`cp` while the service is running.
+## Backup and restore
+
+A backup is one `.tar.gz` with the database and every media file. It can be
+taken while the service is running: the database is copied with SQLite's
+`VACUUM INTO`, which gives a consistent snapshot.
+
+```bash
+sudo -u catmemes npm run backup                            # ./backups/catmemes-<timestamp>.tar.gz
+sudo -u catmemes npm run backup -- /var/backups/catmemes/  # into a directory
+```
+
+Restoring replaces the database and merges media. Files from the archive are
+added or overwritten, and files that exist only on disk are kept. The current
+database is kept next to it as `gatos.db.before-restore-<timestamp>`. The
+script refuses to run while the server answers, so stop it first:
+
+```bash
+sudo systemctl stop catmemes
+sudo -u catmemes npm run restore -- backups/catmemes-20261012-040000.tar.gz
+sudo systemctl start catmemes
+```
+
+The archive is checked before anything is replaced. A truncated file or a
+database that fails SQLite's integrity check aborts the restore with the
+current database untouched. Entries outside `media/` with unexpected names
+are ignored. The archives are plain tar files, so `tar -tzf` lists them.
+
+For nightly backups, add a line to the service user's crontab
+(`sudo crontab -u catmemes -e`), pruning archives older than two weeks:
+
+```
+0 4 * * * cd /opt/catmemes && node --env-file-if-exists=.env scripts/backup.ts >> backups/backup.log 2>&1 && find backups -name 'catmemes-*.tar.gz' -mtime +14 -delete
+```
 
 ## Tag suggestions
 
@@ -115,9 +124,8 @@ Visitors who are not signed in can propose tags; admins promote or discard them.
   live in their own `suggestions` table until approved. Each token can make up
   to 300, names are capped at 64 characters, and a tag the post already has
   (regular or suggested) is refused.
-- **Search and tag list.** Tag search goes by name and matches pending
-  suggestions too; "скрыть предложенные" under the search bar limits it to
-  approved tags (`approved=1` in the URL). The tag list shows pending counts
+- **Search and tag list.** Tag search goes by name and also finds posts
+  where the name is a pending suggestion. The tag list shows pending counts
   as an italic `+N` next to the approved count, and names that exist only as
   suggestions get a dashed outline. Search URLs are now `#tag=<name>`; old
   `#search=<id>` links still work and are rewritten on load. The API still
@@ -138,12 +146,14 @@ touching real tags.
 
 ## Tag coverage chart
 
-"tag coverage chart" in the admin panel adds a contribution-style grid under
-the posts: one cell per page, ten pages per column, shaded by how many posts
-on that page have at least one tag. Hover for the exact count, click a cell to
-jump to that page. The numbers come with the same `/api/posts` call
-(`coverage: true`, admin only) and follow the active tag or suggestion filter,
-so cells always line up with the pager.
+Every visitor sees a contribution-style grid under the posts: one cell per
+page of the full feed, ten pages per column, shaded by how many posts on that
+page have at least one tag. Hover for the exact count, click a cell to jump to
+that page (this leaves any active search). The numbers are a stored snapshot
+that comes with every `/api/posts` response. It changes only when an admin
+presses "recalculate tag coverage" (`recalculateCoverage: true`), and the
+chart shows when that last happened. Until the first recalculation there is
+no chart.
 
 ## Behaviour notes
 

@@ -378,21 +378,6 @@ a, a:visited {
 	min-width: 0;
 }
 
-/* search: approved-only toggle */
-.search-options {
-	display: flex;
-	justify-content: flex-end;
-	margin-top: calc(var(--gap-main) * -0.5);
-}
-.search-options[hidden] {
-	display: none;
-}
-.tag[data-active] {
-	background-color: var(--color-main);
-	border-color: var(--color-main);
-	color: white;
-}
-
 /* tag list: names that are (partly) pending suggestions */
 .tag.tag-unapproved {
 	border: 1px dashed var(--color-main);

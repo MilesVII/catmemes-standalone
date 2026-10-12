@@ -63,14 +63,20 @@ export type Post = {
 	suggestions: Suggestion[]
 }
 export type PostsOptions = {
-	/** Tag search skips pending suggestions. */
-	approved?: boolean,
 	/** Admin: only posts with pending suggestions. */
 	suggested?: boolean,
-	/** Admin: include tagged-post counts for every page. */
-	coverage?: boolean
+	/** Admin: recompute the tag coverage snapshot. */
+	recalculateCoverage?: boolean
 }
-/** `search` is a tag name; pending suggestions with that name match too unless `approved` is set. */
+/** Tag coverage of the whole, unfiltered list; shared by everyone, recomputed on admin request. */
+export type CoverageSnapshot = {
+	computedAt: number,
+	perPage: number,
+	count: number,
+	/** posts with at least one approved tag, per page */
+	tagged: number[]
+}
+/** `search` is a tag name; posts where it is a pending suggestion match too. */
 export async function posts(page: number, search?: string, options: PostsOptions = {}) {
 	const result = await api("/api/posts", { page, search, ...options });
 	if (result.success) {
@@ -91,7 +97,7 @@ export async function posts(page: number, search?: string, options: PostsOptions
 			count: result.value.count as number,
 			posts,
 			perPage: result.value.perPage as number,
-			coverage: result.value.coverage as number[] | undefined
+			coverage: (result.value.coverage ?? null) as CoverageSnapshot | null
 		};
 	} else
 		return null;

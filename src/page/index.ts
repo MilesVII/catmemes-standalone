@@ -29,13 +29,11 @@ async function main() {
 			pager
 		},
 		search: null,
-		approvedOnly: false,
 		loading: false,
 		auth: false,
 		suggester: null,
 		suggesting: false,
-		suggestedOnly: false,
-		coverage: false
+		suggestedOnly: false
 	};
 
 	attachListeners(state);
@@ -73,9 +71,12 @@ function attachListeners(state: State) {
 		const target = tabsMain;
 		e.addEventListener("click", () => target.tab = e.dataset.tab);
 	});
-	attachDash(state, firstPage => {
-		if (firstPage) state.page.pager.page = 0;
-		loadPage(state, !firstPage);
+	attachDash(state, {
+		reload: firstPage => {
+			if (firstPage) state.page.pager.page = 0;
+			loadPage(state, !firstPage);
+		},
+		recalculateCoverage: () => updatePage(state, true)
 	});
 	attachSuggest(state, {
 		rerender: () => rerenderPosts(),
@@ -101,11 +102,6 @@ function attachListeners(state: State) {
 		searchBar.value = "";
 		state.page.pager.page = 0;
 		state.search = null;
-		loadPage(state);
-	});
-	document.querySelector<HTMLElement>("#search-approved")?.addEventListener("click", () => {
-		state.approvedOnly = !state.approvedOnly;
-		state.page.pager.page = 0;
 		loadPage(state);
 	});
 
@@ -172,19 +168,15 @@ async function updateTags(state: State) {
 	}));
 }
 
-/** Reset button and the approved-only toggle only show while a tag is searched. */
+/** The reset button only shows while a tag is searched. */
 function syncSearchControls(state: State) {
-	const searching = state.search !== null;
-	document.querySelector<HTMLElement>("#search-reset").hidden = !searching;
-	document.querySelector<HTMLElement>(".search-options").hidden = !searching;
-	document.querySelector<HTMLElement>("#search-approved").toggleAttribute("data-active", state.approvedOnly);
+	document.querySelector<HTMLElement>("#search-reset").hidden = state.search === null;
 }
 
-function fetchPage(state: State) {
+function fetchPage(state: State, recalculateCoverage = false) {
 	return posts(state.page.pager.page, state.search ?? undefined, {
-		approved: state.approvedOnly,
 		suggested: state.auth && state.suggestedOnly,
-		coverage: state.auth && state.coverage
+		recalculateCoverage: state.auth && recalculateCoverage
 	});
 }
 
@@ -196,17 +188,21 @@ function applyPage(state: State, result: PageResult) {
 	state.page.posts = result.posts;
 	if (state.search !== null)
 		document.querySelector<HTMLInputElement>("#search-bar").value = state.search;
-	renderCoverage(
-		state.auth && state.coverage ? result.coverage : undefined,
-		result.count,
-		result.perPage,
-		state.page.pager.page,
-		page => {
-			state.page.pager.page = page;
-			document.body.scrollIntoView({behavior: "smooth"});
-			loadPage(state);
+	const filtered = state.search !== null || (state.auth && state.suggestedOnly);
+	renderCoverage(result.coverage, filtered ? null : state.page.pager.page, page => {
+		// The chart describes the unfiltered list, so a cell leaves any search or filter.
+		if (state.search !== null) {
+			state.search = null;
+			document.querySelector<HTMLInputElement>("#search-bar").value = "";
 		}
-	);
+		if (state.suggestedOnly) {
+			state.suggestedOnly = false;
+			document.querySelector<HTMLElement>("#dash-suggested")?.removeAttribute("data-active");
+		}
+		state.page.pager.page = page;
+		document.body.scrollIntoView({behavior: "smooth"});
+		loadPage(state);
+	});
 }
 
 async function loadPage(state: State, skipHashChange: boolean = false) {
@@ -230,11 +226,14 @@ function renderList(state: State, list: Post[]) {
 	container.append(...list.map(p => makePost(state, p)));
 }
 
-/** Re-fetches the page and updates cards in place; re-renders the list if the set of posts changed. */
-async function updatePage(state: State) {
+/**
+ * Re-fetches the page and updates cards in place; re-renders the list if the set of posts changed.
+ * `recalculateCoverage` (admin) refreshes the shared coverage snapshot on the way.
+ */
+async function updatePage(state: State, recalculateCoverage = false) {
 	state.loading = true;
 	syncSearchControls(state);
-	const result = await fetchPage(state);
+	const result = await fetchPage(state, recalculateCoverage);
 	if (!result) { state.loading = false; return; }
 
 	const cards = Array.from(document.querySelectorAll<Rampike<HTMLElement, Post>>(".post-list > [data-post-id]"));

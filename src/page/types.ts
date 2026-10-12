@@ -9,8 +9,6 @@ export type State = {
 	},
 	/** Searched tag name. */
 	search: null | Tag["name"],
-	/** Tag search skips pending suggestions. */
-	approvedOnly: boolean,
 	loading: boolean,
 	auth: boolean,
 	/** Suggester token held by this browser, if any. */
@@ -18,7 +16,5 @@ export type State = {
 	/** Tag suggestion mode: shows the tag input on posts for suggesters. */
 	suggesting: boolean,
 	/** Admin: list only posts with pending suggestions. */
-	suggestedOnly: boolean,
-	/** Admin: show the tag coverage chart. */
-	coverage: boolean
+	suggestedOnly: boolean
 };

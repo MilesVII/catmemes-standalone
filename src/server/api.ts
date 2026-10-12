@@ -1,5 +1,5 @@
 import { sql, type Expression, type ExpressionBuilder, type Kysely, type SqlBool } from "kysely";
-import type { Post, Database } from "./db.ts";
+import { getMeta, setMeta, type Post, type Database } from "./db.ts";
 import { config } from "./config.ts";
 import { password, type Result } from "./utils.ts";
 
@@ -187,18 +187,16 @@ async function listTags({ db }: State): Promise<TagEntry[]> {
 }
 
 export type PostListOptions = {
-	/** Tag search matches approved tags only, skipping pending suggestions. */
-	approvedOnly?: boolean,
 	/** Admin only: restrict the list to posts with pending suggestions. */
 	suggested?: boolean,
-	/** Admin only: include per-page tag coverage of the whole (filtered) list. */
-	coverage?: boolean
+	/** Admin only: recompute the stored tag coverage snapshot before answering. */
+	recalculateCoverage?: boolean
 };
 
 /**
- * Search is by tag name, so it can find names that exist only as suggestions.
- * A number is still accepted as a tag id (old links). Returns undefined for
- * "no search" and null for a search that cannot match anything.
+ * Search is by tag name, so it also finds posts where the name is a pending
+ * suggestion. A number is still accepted as a tag id (old links). Returns
+ * undefined for "no search" and null for a search that cannot match anything.
  */
 async function resolveSearch(db: Kysely<Database>, search: unknown): Promise<string | null | undefined> {
 	if (typeof search === "string") {
@@ -212,33 +210,26 @@ async function resolveSearch(db: Kysely<Database>, search: unknown): Promise<str
 	return undefined;
 }
 
-function postFilter(
-	db: Kysely<Database>,
-	tagName: string | null | undefined,
-	includeSuggested: boolean,
-	suggestedOnly: boolean
-) {
+function postFilter(db: Kysely<Database>, tagName: string | null | undefined, suggestedOnly: boolean) {
 	return (eb: ExpressionBuilder<Database, "posts">) => {
 		const conditions: Expression<SqlBool>[] = [];
 		if (tagName === null)
 			conditions.push(sql<SqlBool>`0 = 1`);
-		else if (tagName !== undefined) {
-			const approved = eb(
-				"posts.id", "in",
-				db
-					.selectFrom("pairs as pt")
-					.innerJoin("tags as tt", "tt.id", "pt.tag")
-					.where("tt.name", "=", tagName)
-					.select("pt.post")
-			);
-			conditions.push(includeSuggested
-				? eb.or([
-					approved,
-					eb("posts.id", "in", db.selectFrom("suggestions as st").where("st.name", "=", tagName).select("st.post"))
-				])
-				: approved
-			);
-		}
+		else if (tagName !== undefined)
+			conditions.push(eb.or([
+				eb(
+					"posts.id", "in",
+					db
+						.selectFrom("pairs as pt")
+						.innerJoin("tags as tt", "tt.id", "pt.tag")
+						.where("tt.name", "=", tagName)
+						.select("pt.post")
+				),
+				eb(
+					"posts.id", "in",
+					db.selectFrom("suggestions as st").where("st.name", "=", tagName).select("st.post")
+				)
+			]));
 		if (suggestedOnly)
 			conditions.push(eb(
 				"posts.id", "in",
@@ -247,18 +238,12 @@ function postFilter(
 		return eb.and(conditions);
 	};
 }
-type PostFilter = ReturnType<typeof postFilter>;
 
 async function listPosts(state: State, page: number, search?: number | string, options: PostListOptions = {}) {
 	const { db } = state;
 	const [clearance] = await auth(state);
 	const admin = clearance === "ok";
-	const filter = postFilter(
-		db,
-		await resolveSearch(db, search),
-		options.approvedOnly !== true,
-		admin && options.suggested === true
-	);
+	const filter = postFilter(db, await resolveSearch(db, search), admin && options.suggested === true);
 
 	const countRow = await db
 		.selectFrom("posts")
@@ -289,33 +274,63 @@ async function listPosts(state: State, page: number, search?: number | string, o
 		.limit(POSTS_PER_PAGE)
 		.offset(page * POSTS_PER_PAGE)
 		.orderBy("posts.time", "desc")
-		.orderBy("posts.id", "desc") // must match the ordering in tagCoverage
+		.orderBy("posts.id", "desc") // must match the ordering in computeCoverage
 		.execute();
 
 	const suggestions = await suggestionsFor(state, rows.map(r => r.id), admin);
 	const posts = rows.map(r => ({ ...r, suggestions: suggestions.get(r.id) ?? [] }));
-	const coverage = admin && options.coverage ? await tagCoverage(db, filter) : undefined;
+	const coverage = admin && options.recalculateCoverage
+		? await recalculateCoverage(db)
+		: await storedCoverage(db);
 
 	return { count, posts, perPage: POSTS_PER_PAGE, coverage };
 }
 
-/** Number of posts with at least one tag on every page of the list, page 0 first. */
-async function tagCoverage(db: Kysely<Database>, filter: PostFilter) {
+/** Tag coverage of the whole, unfiltered post list, as of `computedAt`. */
+export type CoverageSnapshot = {
+	computedAt: number,
+	perPage: number,
+	/** total posts at the time, so the last page's size is known */
+	count: number,
+	/** posts with at least one approved tag, per page, page 0 first */
+	tagged: number[]
+};
+const COVERAGE_KEY = "coverage";
+
+async function storedCoverage(db: Kysely<Database>): Promise<CoverageSnapshot | null> {
+	const raw = await getMeta(db, COVERAGE_KEY);
+	if (raw === null) return null;
+	try {
+		return JSON.parse(raw) as CoverageSnapshot;
+	} catch {
+		return null;
+	}
+}
+
+/** Computed only when an admin asks for it; everyone else gets the stored snapshot. */
+async function recalculateCoverage(db: Kysely<Database>): Promise<CoverageSnapshot> {
 	const rows = await db
 		.with("ordered", qc => qc
 			.selectFrom("posts")
-			.where(filter)
 			.select([
 				sql<number>`(ROW_NUMBER() OVER (ORDER BY posts.time DESC, posts.id DESC) - 1) / ${sql.lit(POSTS_PER_PAGE)}`.as("page"),
 				sql<number>`EXISTS (SELECT 1 FROM pairs WHERE pairs.post = posts.id)`.as("tagged")
 			])
 		)
 		.selectFrom("ordered")
-		.select(["page", sql<number>`SUM(tagged)`.as("tagged")])
+		.select(["page", sql<number>`SUM(tagged)`.as("tagged"), sql<number>`COUNT(*)`.as("total")])
 		.groupBy("page")
 		.orderBy("page")
 		.execute();
-	return rows.map(r => r.tagged);
+
+	const snapshot: CoverageSnapshot = {
+		computedAt: Date.now(),
+		perPage: POSTS_PER_PAGE,
+		count: rows.reduce((sum, r) => sum + r.total, 0),
+		tagged: rows.map(r => r.tagged)
+	};
+	await setMeta(db, COVERAGE_KEY, JSON.stringify(snapshot));
+	return snapshot;
 }
 
 async function attachTag({ db }: State, post: string, tag: string) {

@@ -1,6 +1,6 @@
 import { State } from "./types";
 
-function parseUrl(): Partial<{ page: string, tag: string, search: string, approved: string }> {
+function parseUrl(): Partial<{ page: string, tag: string, search: string }> {
 	const hash = window.location.hash.slice(1);
 
 	const entries = hash
@@ -22,8 +22,7 @@ export function updateURL(state: State, replace = false) {
 	const url = new URL(window.location.toString());
 	url.hash = [
 		["page", state.page.pager.page],
-		["tag", state.search],
-		["approved", state.search !== null && state.approvedOnly ? 1 : null]
+		["tag", state.search]
 	]
 		.filter(([_, v]) => v)
 		.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
@@ -34,14 +33,13 @@ export function updateURL(state: State, replace = false) {
 }
 
 /**
- * Reads page, searched tag name and the approved-only flag from the hash.
+ * Reads page and searched tag name from the hash.
  * Old links carry "search=<tag id>"; that id is returned for the caller to
  * resolve to a name once the tag list is loaded.
  */
 export function hashToState(state: State): number | null {
 	const hashParams = parseUrl();
 	state.page.pager.page = hashParams.page ? parseInt(hashParams.page) : 0;
-	state.approvedOnly = hashParams.approved === "1";
 	if (hashParams.tag) {
 		state.search = hashParams.tag;
 		return null;

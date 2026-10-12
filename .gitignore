@@ -4,3 +4,4 @@ public/index.js.map
 data/
 .env
 *.sql
+backups/

@@ -207,3 +207,16 @@ export const migrations: Record<string, (db: Kysely<Database>) => Promise<void>>
 			.execute();
 	}
 }
+
+export async function getMeta(db: Kysely<Database>, key: string) {
+	const row = await db.selectFrom("meta").select("value").where("key", "=", key).executeTakeFirst();
+	return row?.value ?? null;
+}
+
+export async function setMeta(db: Kysely<Database>, key: string, value: string) {
+	await db
+		.insertInto("meta")
+		.values({ key, value })
+		.onConflict(oc => oc.column("key").doUpdateSet({ value }))
+		.execute();
+}

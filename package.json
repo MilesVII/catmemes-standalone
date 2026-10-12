@@ -12,8 +12,8 @@
 		"build": "esbuild src/page/index.ts --bundle --sourcemap --outfile=public/index.js",
 		"watch": "esbuild src/page/index.ts --bundle --sourcemap --watch --outfile=public/index.js",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
-		"db:import": "node --env-file-if-exists=.env scripts/import-sql.ts",
-		"media:pull": "node --env-file-if-exists=.env scripts/pull-media.ts"
+		"backup": "node --env-file-if-exists=.env scripts/backup.ts",
+		"restore": "node --env-file-if-exists=.env scripts/restore.ts"
 	},
 	"dependencies": {
 		"@hono/node-server": "^1.19.0",
