@@ -54,9 +54,10 @@ export function renderCoverage(
 	const summary = document.querySelector<HTMLElement>(".coverage-summary");
 	if (summary) {
 		const sum = tagged.reduce((a, b) => a + b, 0);
-		const full = tagged.filter((n, page) => level(n, pageSize(page)) === 4).length;
+		const some = tagged.filter((n, page) => level(n, pageSize(page)) > 0).length;
+		const ratio = Math.round(100 * some / tagged.length);
 		summary.textContent =
-			`с тегами ${sum} из ${count} постов, полностью размечено ${full} из ${tagged.length} стр.` +
+			`с тегами ${sum} из ${count} постов, ~${ratio}%` +
 			` · обновлено ${formatDate(snapshot.computedAt)}`;
 	}
 }
