@@ -24,9 +24,13 @@ async function api(
 }
 
 export type Tag = {
-	id: number,
+	/** null for names that so far exist only as suggestions */
+	id: number | null,
 	name: string,
-	count: number
+	/** posts with the approved tag */
+	count: number,
+	/** posts where the name is a pending suggestion */
+	suggested: number
 }
 export async function tags() {
 	const result = await api("/api/tags");
@@ -36,6 +40,17 @@ export async function tags() {
 		return null;
 }
 
+export type Suggestion = {
+	id: number,
+	name: string,
+	/** Suggested with this browser's token. */
+	mine: boolean,
+	/** This visitor's vote: -1, 0 or 1. */
+	myVote: number,
+	/** Tallies, present for admins only. */
+	up?: number,
+	down?: number
+}
 export type Post = {
 	caption: string,
 	id: string,
@@ -44,10 +59,20 @@ export type Post = {
 	tags: {
 		id: number,
 		name: string
-	}[]
+	}[],
+	suggestions: Suggestion[]
 }
-export async function posts(page: number, search?: number) {
-	const result = await api("/api/posts", { page, search });
+export type PostsOptions = {
+	/** Tag search skips pending suggestions. */
+	approved?: boolean,
+	/** Admin: only posts with pending suggestions. */
+	suggested?: boolean,
+	/** Admin: include tagged-post counts for every page. */
+	coverage?: boolean
+}
+/** `search` is a tag name; pending suggestions with that name match too unless `approved` is set. */
+export async function posts(page: number, search?: string, options: PostsOptions = {}) {
+	const result = await api("/api/posts", { page, search, ...options });
 	if (result.success) {
 		const posts: Post[] = result.value.posts.map((raw: any) => ({
 			caption: raw.caption,
@@ -59,9 +84,15 @@ export async function posts(page: number, search?: number) {
 					id: t.tagId,
 					name: t.tagName
 				}))
-				.filter((t: any) => t.id !== null)
+				.filter((t: any) => t.id !== null),
+			suggestions: raw.suggestions ?? []
 		}));
-		return { count: result.value.count, posts, perPage: result.value.perPage };
+		return {
+			count: result.value.count as number,
+			posts,
+			perPage: result.value.perPage as number,
+			coverage: result.value.coverage as number[] | undefined
+		};
 	} else
 		return null;
 }
@@ -95,3 +126,48 @@ export async function attachTag(post: string, tag: string) {
 export async function untag(post: string, tag: number) {
 	return await api("/api/post/untag", { post, tag });
 }
+
+export type SuggestStatus = {
+	active: { expiry: number } | null,
+	/** Milliseconds until a new token can be requested. */
+	cooldown: number
+};
+export async function suggestStatus() {
+	const result = await api("/api/suggest/status");
+	return result.success ? result.value as SuggestStatus : null;
+}
+
+export async function suggestToken() {
+	const result = await api("/api/suggest/token");
+	return result.success
+		? result.value as Result<{ expiry: number }, { cooldown: number }>
+		: null;
+}
+
+export async function suggestRedeem(token: string) {
+	const result = await api("/api/suggest/redeem", { token });
+	return result.success ? result.value as Result<{ expiry: number }, string> : null;
+}
+
+export async function suggestIssue() {
+	const result = await api("/api/suggest/issue");
+	return result.success ? result.value as { token: string, expiry: number } : null;
+}
+
+export type SuggestError = "nosuggester" | "invalid" | "nopost" | "exists" | "limit" | "notfound" | "own";
+type SuggestResult<T> = Result<T, SuggestError | "network">;
+async function suggestCall<T>(endpoint: string, payload: any): Promise<SuggestResult<T>> {
+	const result = await api(endpoint, payload);
+	return result.success ? result.value : { success: false, error: "network" };
+}
+
+export const suggestAdd = (post: string, tag: string) =>
+	suggestCall<{ id: number }>("/api/suggest/add", { post, tag });
+export const suggestRemove = (suggestion: number) =>
+	suggestCall<true>("/api/suggest/remove", { suggestion });
+export const suggestVote = (suggestion: number, value: -1 | 0 | 1) =>
+	suggestCall<true>("/api/suggest/vote", { suggestion, value });
+export const suggestApprove = (suggestion: number) =>
+	suggestCall<true>("/api/suggest/approve", { suggestion });
+export const suggestReject = (suggestion: number) =>
+	suggestCall<true>("/api/suggest/reject", { suggestion });

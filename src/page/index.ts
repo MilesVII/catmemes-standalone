@@ -3,7 +3,9 @@ import { define as defineTabs, RampikeTabs } from "./components/tabs";
 import { define as definePages, RampikePagination } from "./components/pagination";
 import { State } from "./types";
 import { attachDash } from "./dash";
-import { hashToState, updateURL } from "./url";
+import { attachSuggest, initSuggest, submitSuggestion, suggestionChip } from "./suggest";
+import { renderCoverage } from "./coverage";
+import { hashToState, takeSuggestToken, updateURL } from "./url";
 import { fromTemplateFirst, mudcrack, rampike, Rampike } from "rampike";
 
 start();
@@ -27,20 +29,40 @@ async function main() {
 			pager
 		},
 		search: null,
+		approvedOnly: false,
 		loading: false,
-		auth: false
+		auth: false,
+		suggester: null,
+		suggesting: false,
+		suggestedOnly: false,
+		coverage: false
 	};
 
 	attachListeners(state);
 
-	updateTags(state);
-	hashToState(state);
+	const tagsReady = updateTags(state);
+	const legacyId = hashToState(state);
+	// A redeemed link changes which suggestions are "mine", so it goes before the first fetch.
+	const linkToken = takeSuggestToken();
+	if (linkToken) await initSuggest(state, linkToken);
+	else initSuggest(state, null);
+	if (legacyId !== null) await resolveLegacySearch(state, legacyId, tagsReady);
 	loadPage(state, true);
 
-	window.addEventListener("hashchange", () => {
-		hashToState(state);
+	window.addEventListener("hashchange", async () => {
+		const token = takeSuggestToken();
+		if (token) await initSuggest(state, token);
+		const legacy = hashToState(state);
+		if (legacy !== null) await resolveLegacySearch(state, legacy, state.tags.length ? Promise.resolve() : updateTags(state));
 		loadPage(state, true);
 	});
+}
+
+/** Old links search by tag id ("search=211"); map it to the name and rewrite the hash. */
+async function resolveLegacySearch(state: State, id: number, tagsReady: Promise<void>) {
+	await tagsReady;
+	state.search = state.tags.find(t => t.id === id)?.name ?? null;
+	updateURL(state, true);
 }
 
 function attachListeners(state: State) {
@@ -51,7 +73,16 @@ function attachListeners(state: State) {
 		const target = tabsMain;
 		e.addEventListener("click", () => target.tab = e.dataset.tab);
 	});
-	attachDash(state, () => loadPage(state, true));
+	attachDash(state, firstPage => {
+		if (firstPage) state.page.pager.page = 0;
+		loadPage(state, !firstPage);
+	});
+	attachSuggest(state, {
+		rerender: () => rerenderPosts(),
+		refresh: () => updatePage(state),
+		refreshTags: () => updateTags(state),
+		search: name => pickTag(state, name)
+	});
 
 	const searchBar = document.querySelector<HTMLInputElement>("input#search-bar");
 	const searchButton = document.querySelector<HTMLElement>("#search-button");
@@ -59,7 +90,7 @@ function attachListeners(state: State) {
 		const term = searchBar.value.trim().toLowerCase();
 		const tag = state.tags.find(t => t.name === term);
 		if (!tag) return;
-		pickTag(state, tag.id);
+		pickTag(state, tag.name);
 	};
 	searchButton.addEventListener("click", searchCall);
 	searchBar.addEventListener("keydown", e => {
@@ -70,6 +101,11 @@ function attachListeners(state: State) {
 		searchBar.value = "";
 		state.page.pager.page = 0;
 		state.search = null;
+		loadPage(state);
+	});
+	document.querySelector<HTMLElement>("#search-approved")?.addEventListener("click", () => {
+		state.approvedOnly = !state.approvedOnly;
+		state.page.pager.page = 0;
 		loadPage(state);
 	});
 
@@ -100,6 +136,7 @@ async function updateTags(state: State) {
 	list.append(...t.map(tag => {
 		const item = document.createElement("option");
 		item.value = tag.name;
+		if (tag.count === 0) item.label = "предложенный";
 		item.dataset.id = `${tag.id}`;
 		item.dataset.count = `${tag.count}`;
 		return item;
@@ -109,62 +146,121 @@ async function updateTags(state: State) {
 	const searchBar = document.querySelector<HTMLInputElement>("#search-bar");
 	if (!buttonList || !searchBar) return;
 	buttonList.innerHTML = "";
-	buttonList.append(...t.map(tag => 
-		mudcrack({
+	buttonList.append(...t.map(tag => {
+		// "name (5)" for approved posts, plus "+2" in the suggestion style for pending ones;
+		// names with nothing approved yet get the dashed outline.
+		const contents: Element[] = [
+			mudcrack({ tagName: "span", contents: tag.count > 0 ? `${tag.name} (${tag.count})` : tag.name })
+		];
+		if (tag.suggested > 0)
+			contents.push(mudcrack({ tagName: "span", className: "tag-pending", contents: `+${tag.suggested}` }));
+		const title = tag.count === 0
+			? `предложенный тег, ещё не одобрен (${tag.suggested})`
+			: tag.suggested > 0 ? `ещё ${tag.suggested} предложено, не одобрено` : "";
+		return mudcrack({
 			tagName: "button",
-			className: "tag",
-			contents: `${tag.name} (${tag.count})`,
+			className: tag.count === 0 ? "tag tag-unapproved" : "tag",
+			attributes: title ? { title } : {},
+			contents,
 			events: {
 				click: () => {
 					searchBar.value = tag.name;
-					pickTag(state, tag.id);
+					pickTag(state, tag.name);
 				}
 			}
-		})
-	));
+		});
+	}));
+}
+
+/** Reset button and the approved-only toggle only show while a tag is searched. */
+function syncSearchControls(state: State) {
+	const searching = state.search !== null;
+	document.querySelector<HTMLElement>("#search-reset").hidden = !searching;
+	document.querySelector<HTMLElement>(".search-options").hidden = !searching;
+	document.querySelector<HTMLElement>("#search-approved").toggleAttribute("data-active", state.approvedOnly);
+}
+
+function fetchPage(state: State) {
+	return posts(state.page.pager.page, state.search ?? undefined, {
+		approved: state.approvedOnly,
+		suggested: state.auth && state.suggestedOnly,
+		coverage: state.auth && state.coverage
+	});
+}
+
+type PageResult = NonNullable<Awaited<ReturnType<typeof fetchPage>>>;
+
+/** Applies a fetched page: pager, search bar, and the coverage chart. */
+function applyPage(state: State, result: PageResult) {
+	state.page.pager.pageCount = Math.ceil(result.count / result.perPage);
+	state.page.posts = result.posts;
+	if (state.search !== null)
+		document.querySelector<HTMLInputElement>("#search-bar").value = state.search;
+	renderCoverage(
+		state.auth && state.coverage ? result.coverage : undefined,
+		result.count,
+		result.perPage,
+		state.page.pager.page,
+		page => {
+			state.page.pager.page = page;
+			document.body.scrollIntoView({behavior: "smooth"});
+			loadPage(state);
+		}
+	);
 }
 
 async function loadPage(state: State, skipHashChange: boolean = false) {
 	state.loading = true;
-	document.querySelector<HTMLElement>("#search-reset").hidden = state.search === null;
-	const result = await posts(state.page.pager.page, state.search ?? undefined);
-	state.page.pager.pageCount = Math.ceil(result.count / result.perPage);
-	state.page.posts = result.posts;
-	const container = document.querySelector<HTMLElement>(".post-list")!;
-	container.innerHTML = "";
-	container.append(...Array.from(result.posts).map(p => makePost(state, p)));
+	syncSearchControls(state);
+	const result = await fetchPage(state);
+	if (!result) { state.loading = false; return; }
+	applyPage(state, result);
+	renderList(state, result.posts);
 	state.loading = false;
-	if (state.search !== null) {
-		const searchBar = document.querySelector<HTMLInputElement>("#search-bar");
-		const currentTag = state.tags.find(({id}) => id === state.search);
-		if (currentTag) searchBar.value = currentTag.name;
-	}
 	if (!skipHashChange) updateURL(state);
 }
+
+function renderList(state: State, list: Post[]) {
+	const container = document.querySelector<HTMLElement>(".post-list")!;
+	container.innerHTML = "";
+	if (list.length === 0 && state.auth && state.suggestedOnly) {
+		container.append(mudcrack({ tagName: "div", className: "post-list-empty", contents: "no pending suggestions" }));
+		return;
+	}
+	container.append(...list.map(p => makePost(state, p)));
+}
+
+/** Re-fetches the page and updates cards in place; re-renders the list if the set of posts changed. */
 async function updatePage(state: State) {
 	state.loading = true;
-	document.querySelector<HTMLElement>("#search-reset").hidden = state.search === null;
-	const result = await posts(state.page.pager.page, state.search ?? undefined);
-	state.page.pager.pageCount = Math.ceil(result.count / result.perPage);
-	state.page.posts = result.posts;
-	let reloadFlag = false;
-	result.posts.forEach(post => {
-		const target = document.querySelector<Rampike<HTMLElement, Post>>(`[data-post-id="${post.id}"]`);
-		if (!target) {
-			console.error("can't find post card for ", post.id);
-			reloadFlag = true;
-			return;
-		}
-		target.rampike.params = post;
-		target.rampike.render();
-	})
-	state.loading = false;
-	if (state.search !== null) {
-		const searchBar = document.querySelector<HTMLInputElement>("#search-bar");
-		const currentTag = state.tags.find(({id}) => id === state.search);
-		if (currentTag) searchBar.value = currentTag.name;
+	syncSearchControls(state);
+	const result = await fetchPage(state);
+	if (!result) { state.loading = false; return; }
+
+	const cards = Array.from(document.querySelectorAll<Rampike<HTMLElement, Post>>(".post-list > [data-post-id]"));
+	const sameList = cards.length === result.posts.length &&
+		cards.every((card, i) => card.dataset.postId === result.posts[i].id);
+	if (!sameList) {
+		// e.g. an approved suggestion dropped the post out of the "suggested only" list
+		applyPage(state, result);
+		renderList(state, result.posts);
+		state.loading = false;
+		return;
 	}
-	if (reloadFlag) window.location.reload();
+
+	applyPage(state, result);
+	result.posts.forEach((post, i) => {
+		cards[i].rampike.params = post;
+		cards[i].rampike.render();
+	});
+	state.loading = false;
+}
+
+/** Re-renders the cards from the data they already have (e.g. after a mode switch). */
+function rerenderPosts() {
+	document
+		.querySelectorAll<Rampike<HTMLElement, Post>>(".post-list > [data-post-id]")
+		.forEach(card => card.rampike.render());
 }
 
 function makePost(state: State, post: Post) {
@@ -195,14 +291,14 @@ function makePost(state: State, post: Post) {
 		caption.textContent = params.caption;
 
 		tags.innerHTML = "";
-		tags.hidden = params.tags.length === 0;
+		tags.hidden = params.tags.length === 0 && params.suggestions.length === 0;
 		tags.append(...params.tags.map(({ name, id }) =>
 			mudcrack({
 				tagName: "div",
 				className: "tag",
 				contents: name,
 				events: {
-					"click": () => pickTag(state, id),
+					"click": () => pickTag(state, name),
 					"mousedown": e => {
 						if (e.button !== 2 || !state.auth) return true;
 						e.preventDefault();
@@ -215,18 +311,32 @@ function makePost(state: State, post: Post) {
 				}
 			})
 		));
+		tags.append(...params.suggestions.map(s => suggestionChip(state, params, s)));
 
-		adder.hidden = !state.auth;
+		adder.hidden = !state.auth && !state.suggesting;
+		adder.placeholder = state.auth ? "add tag" : "предложить тег";
 		if (!adderListenerAttached) {
+			adder.addEventListener("input", () => adder.setCustomValidity(""));
 			adder.addEventListener("keydown", async e => {
 				if (e.key !== "Enter") return;
 				const value = adder.value.trim();
 				if (value.length === 0) return;
 				adder.disabled = true;
-				await attachTag(params.id, value);
-				adder.disabled = false;
-				updateTags(state);
-				updatePage(state);
+				if (state.auth) {
+					await attachTag(params.id, value);
+					adder.disabled = false;
+					updateTags(state);
+					updatePage(state);
+				} else {
+					const error = await submitSuggestion(state, params.id, value);
+					adder.disabled = false;
+					if (error) {
+						adder.setCustomValidity(error);
+						adder.reportValidity();
+					} else {
+						adder.value = "";
+					}
+				}
 			});
 			adderListenerAttached = true;
 		}
@@ -236,7 +346,7 @@ function makePost(state: State, post: Post) {
 	});
 }
 
-function pickTag(state: State, tag: number) {
+function pickTag(state: State, tag: string) {
 	state.search = tag;
 	state.page.pager.page = 0;
 	document.body.scrollIntoView({behavior: "smooth"});

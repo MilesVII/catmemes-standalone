@@ -231,3 +231,180 @@ a, a:visited {
 	padding: var(--padding-tag);
 	cursor: pointer;
 }
+
+.butt[data-active] {
+	background: var(--color-fore);
+	border-color: var(--color-main);
+	color: var(--color-main);
+}
+
+.dash-note {
+	font-size: 14px;
+	line-height: 18px;
+	text-align: center;
+	opacity: .75;
+}
+
+/* suggested tags: dashed outline, inline vote / moderation buttons */
+.post-tags > .tag.suggested {
+	background-color: var(--color-fore);
+	border: 1px dashed var(--color-main);
+	color: var(--color-text);
+	cursor: default;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding-right: 4px;
+}
+.suggested-name {
+	font-style: italic;
+}
+.suggested-score {
+	font-size: 13px;
+	opacity: .7;
+	white-space: nowrap;
+}
+.suggested-button {
+	min-width: 22px;
+	height: 22px;
+	padding: 0 4px;
+	border-radius: 6px;
+	border: 1px solid var(--color-line);
+	background: var(--color-back);
+	line-height: 20px;
+	cursor: pointer;
+}
+.suggested-button:hover {
+	border-color: var(--color-main);
+}
+.suggested-button[data-active] {
+	background: var(--color-main);
+	border-color: var(--color-main);
+	color: white;
+}
+.suggested-button:disabled {
+	cursor: progress;
+	opacity: .5;
+}
+
+/* tag coverage chart (admin) */
+.coverage-wrap {
+	--cell: 14px;
+	--cell-gap: 3px;
+	--level-0: var(--color-line);
+	--level-1: color-mix(in srgb, var(--color-main) 25%, var(--color-fore));
+	--level-2: color-mix(in srgb, var(--color-main) 50%, var(--color-fore));
+	--level-3: color-mix(in srgb, var(--color-main) 75%, var(--color-fore));
+	--level-4: var(--color-main);
+
+	background-color: var(--color-fore);
+	border-radius: var(--radius-card);
+	padding: var(--padding-card);
+	display: flex;
+	flex-flow: column nowrap;
+	gap: var(--gap);
+	min-width: 0;
+}
+.coverage-wrap[hidden] {
+	display: none;
+}
+.coverage-head {
+	display: flex;
+	flex-flow: row wrap;
+	align-items: center;
+	gap: var(--gap);
+}
+.coverage-summary {
+	font-size: 14px;
+	opacity: .75;
+}
+.coverage-legend {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--cell-gap);
+	font-size: 13px;
+	opacity: .75;
+}
+.coverage-legend > i {
+	display: inline-block;
+	width: var(--cell);
+	height: var(--cell);
+	border-radius: 3px;
+}
+.coverage-scroll {
+	overflow-x: auto;
+	padding-bottom: 6px;
+	scrollbar-color: var(--color-line) transparent;
+}
+
+.post-list-empty {
+	grid-column: 1 / -1;
+	padding: var(--padding-card);
+	text-align: center;
+	opacity: .6;
+}
+.coverage {
+	display: grid;
+	grid-template-rows: repeat(var(--rows, 10), var(--cell));
+	grid-auto-flow: column;
+	grid-auto-columns: var(--cell);
+	gap: var(--cell-gap);
+	width: max-content;
+	padding: 2px;
+}
+.coverage > button {
+	width: var(--cell);
+	height: var(--cell);
+	padding: 0;
+	border-radius: 3px;
+	cursor: pointer;
+}
+.coverage > button:hover {
+	outline: 1px solid var(--color-text);
+}
+.coverage > button[data-current] {
+	outline: 2px solid var(--color-text);
+	outline-offset: 1px;
+}
+[data-level="0"] { background-color: var(--level-0); }
+[data-level="1"] { background-color: var(--level-1); }
+[data-level="2"] { background-color: var(--level-2); }
+[data-level="3"] { background-color: var(--level-3); }
+[data-level="4"] { background-color: var(--level-4); }
+
+/* lets the posts column shrink below the coverage chart width (it scrolls instead) */
+.main {
+	min-width: 0;
+}
+
+/* search: approved-only toggle */
+.search-options {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: calc(var(--gap-main) * -0.5);
+}
+.search-options[hidden] {
+	display: none;
+}
+.tag[data-active] {
+	background-color: var(--color-main);
+	border-color: var(--color-main);
+	color: white;
+}
+
+/* tag list: names that are (partly) pending suggestions */
+.tag.tag-unapproved {
+	border: 1px dashed var(--color-main);
+	font-style: italic;
+}
+.tag-pending {
+	margin-left: 6px;
+	font-size: 15px;
+	font-weight: 500;
+	font-style: italic;
+	color: var(--color-main);
+}
+.suggested-name {
+	cursor: pointer;
+}

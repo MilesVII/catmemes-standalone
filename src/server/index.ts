@@ -1,17 +1,20 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, open, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { Hono, type Context } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { serve } from "@hono/node-server";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { config } from "./config.ts";
-import { connect, ensureSchema } from "./db.ts";
+import { connect, ensureSchema, metaValue } from "./db.ts";
 import { routes, type State } from "./api.ts";
 
 const db = connect(config.dbPath);
 await ensureSchema(db);
+const voteSalt = await metaValue(db, "vote-salt", () => crypto.randomUUID());
 await mkdir(config.mediaDir, { recursive: true });
 
 const app = new Hono();
@@ -66,12 +69,43 @@ app.all("/feed/r2/:key", async c => {
 	return respond(c, 200);
 });
 
+const SUGGEST_COOKIE = "suggest_token";
+
+function setSuggestCookie(c: Context, token: string, expiry: number) {
+	setCookie(c, SUGGEST_COOKIE, token, {
+		httpOnly: true,
+		secure: config.cookieSecure,
+		sameSite: "Strict",
+		path: "/api/",
+		maxAge: Math.max(0, Math.floor((expiry - Date.now()) / 1000))
+	});
+}
+
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+/**
+ * Salted hash of the visitor's address, used to deduplicate anonymous votes.
+ * X-Real-IP is only trusted from a loopback peer, i.e. the local nginx.
+ */
+function clientId(c: Context) {
+	const peer = getConnInfo(c).remote.address ?? "";
+	const forwarded = c.req.header("x-real-ip");
+	const address = LOOPBACK.has(peer) && forwarded ? forwarded : peer;
+	return createHash("sha256").update(`${voteSalt}:${address}`).digest("base64url");
+}
+
+const isVote = (v: unknown): v is -1 | 0 | 1 => v === -1 || v === 0 || v === 1;
+
 app.post("*", async c => {
 	const route = pickRoute(c.req.path);
 	if (!route) return respond(c, 501);
 
-	const token = getCookie(c, "auth_token");
-	const state: State = { db, token };
+	const state: State = {
+		db,
+		token: getCookie(c, "auth_token"),
+		suggestToken: getCookie(c, SUGGEST_COOKIE),
+		client: clientId(c)
+	};
 	const params: any = await c.req.json().catch(() => null);
 
 	switch (route) {
@@ -127,7 +161,14 @@ app.post("*", async c => {
 		case("/api/posts"): {
 			if (typeof params?.page !== "number") return respond(c, 400);
 
-			const result = await routes[route](state, params.page, params.search);
+			const search = typeof params.search === "number" || typeof params.search === "string"
+				? params.search
+				: undefined;
+			const result = await routes[route](state, params.page, search, {
+				approvedOnly: params.approved === true,
+				suggested: params.suggested === true,
+				coverage: params.coverage === true
+			});
 			return c.json(result);
 		}
 		case("/api/post/attach"): {
@@ -160,6 +201,53 @@ app.post("*", async c => {
 
 			const result = await routes[route](state, params.url);
 			return respond(c, 200, result.result);
+		}
+		case("/api/suggest/status"): {
+			const result = await routes[route](state);
+			if (state.suggestToken && !result.result?.active) deleteCookie(c, SUGGEST_COOKIE, { path: "/api/" });
+			return c.json(result);
+		}
+		case("/api/suggest/token"): {
+			const result = await routes[route](state);
+			if (result.result?.success && result.result.value.token) {
+				setSuggestCookie(c, result.result.value.token, result.result.value.expiry);
+				delete result.result.value.token;
+			}
+			return c.json(result);
+		}
+		case("/api/suggest/issue"): {
+			const result = await routes[route](state);
+			if (result.clearance !== "ok") return respond(c, 401, result.clearance);
+			return c.json(result);
+		}
+		case("/api/suggest/redeem"): {
+			if (typeof params?.token !== "string") return respond(c, 400);
+
+			const result = await routes[route](state, params.token);
+			if (result.result?.success) setSuggestCookie(c, params.token, result.result.value.expiry);
+			return c.json(result);
+		}
+		case("/api/suggest/add"): {
+			if (typeof params?.post !== "string") return respond(c, 400);
+			if (typeof params?.tag !== "string")  return respond(c, 400);
+
+			const result = await routes[route](state, params.post, params.tag);
+			return c.json(result);
+		}
+		case("/api/suggest/remove"):
+		case("/api/suggest/approve"):
+		case("/api/suggest/reject"): {
+			if (typeof params?.suggestion !== "number") return respond(c, 400);
+
+			const result = await routes[route](state, params.suggestion);
+			return c.json(result);
+		}
+		case("/api/suggest/vote"): {
+			if (typeof params?.suggestion !== "number") return respond(c, 400);
+			if (!isVote(params?.value))                 return respond(c, 400);
+
+			const result = await routes[route](state, params.suggestion, params.value);
+			return c.json(result);
 		}
 	}
 });

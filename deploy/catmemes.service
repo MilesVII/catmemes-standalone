@@ -15,7 +15,7 @@ RestartSec=3
 # Hardening: the service only needs to write its own data directory.
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 PrivateTmp=true
 ReadWritePaths=/opt/catmemes/data
 
