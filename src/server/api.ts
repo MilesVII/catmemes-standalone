@@ -1,7 +1,7 @@
 import { sql, type Expression, type ExpressionBuilder, type Kysely, type SqlBool } from "kysely";
 import { getMeta, setMeta, type Post, type Database } from "./db.ts";
 import { config } from "./config.ts";
-import { password, type Result } from "./utils.ts";
+import { hashPassword, verifyPassword, type Result } from "./utils.ts";
 
 const POSTS_PER_PAGE = 20;
 const TAG_MAX_LENGTH = 64;
@@ -14,7 +14,9 @@ export type State = {
 	/** Suggester token cookie. */
 	suggestToken?: string,
 	/** Salted hash of the client address; identifies anonymous voters. */
-	client: string
+	client: string,
+	/** Filled in by the route guard: id of the signed-in admin, if any. */
+	user?: number
 };
 
 type Clearance = "expired" | "nope" | "ok";
@@ -29,12 +31,11 @@ function guarded<T extends any[], R>(
 	core: Route<T, R>
 ): (state: State, ...rest: T) => Promise<ProtectedResult<R>> {
 	return async (state: State, ...rest: T) => {
-		if (protectedRoute) {
-			const [clearance] = await auth(state);
-			if (clearance !== "ok") return { clearance, result: null }
-		}
-		return { clearance: "ok", result: await core(state, ...rest)}
-	}
+		const [clearance, user] = await auth(state);
+		if (clearance === "ok") state.user = user!;
+		else if (protectedRoute) return { clearance, result: null };
+		return { clearance: "ok", result: await core(state, ...rest) };
+	};
 };
 
 export const routes = {
@@ -47,8 +48,9 @@ export const routes = {
 	"/api/posts"         : guarded(false, listPosts),
 	"/api/post/attach"   : guarded( true, attachTag),
 	"/api/post/untag"    : guarded( true, untag),
+	"/api/tag/rename"    : guarded( true, renameTag),
+	"/api/tag/delete"    : guarded( true, deleteTag),
 	"/feed/post"         : guarded(false, feedPost), // protected by feed token
-	"/proxy"             : guarded(false, proxy),
 
 	"/api/suggest/status" : guarded(false, suggestStatus),
 	"/api/suggest/token"  : guarded(false, requestSuggester), // rate limited by the global cooldown
@@ -73,32 +75,32 @@ async function auth({ db, token }: State): Promise<[Clearance, number | null]> {
 	return ["ok", entry.user];
 }
 type Sessions = Awaited<ReturnType<typeof getSessions>>;
-async function getSessions({ db, token }: State, user: number) {
+/** The user's sessions, `current` (a token value) first, the rest in creation order. */
+async function getSessions({ db }: State, user: number, current: string | undefined) {
 	const tokens = await db
 		.selectFrom("tokens")
 		.select(["info", "id", "value"])
 		.where("user", "=", user)
 		.execute();
 	return tokens
-		.sort((_, t) => t.value === token ? 1 : -1)
+		.sort((a, b) => Number(b.value === current) - Number(a.value === current) || a.id - b.id)
 		.map(t => ({ id: t.id, info: t.info }));
 }
 
 async function vibecheck(state: State): Promise<Sessions | null> {
-	const [status, user] = await auth(state);
-	return status === "ok" ? await getSessions(state, user!) : null;
+	return state.user === undefined ? null : await getSessions(state, state.user, state.token);
 }
 
 async function register(state: State, login: string, pwd: string): Promise<boolean> {
 	const { db } = state;
 	await db
 		.insertInto("users")
-		.values({ login, password: await password(pwd) })
+		.values({ login, password: await hashPassword(pwd) })
 		.execute();
 	return true;
 }
 
-async function signin(state: State, login: string, pwd: string, info: string): Promise<Result<{ token?: string, sessions: Sessions }, "nouser" | "password">> {
+async function signin(state: State, login: string, pwd: string, info: string): Promise<Result<{ token: string, sessions: Sessions }, "nouser" | "password">> {
 	const { db } = state;
 	const user = await db
 		.selectFrom("users")
@@ -106,41 +108,42 @@ async function signin(state: State, login: string, pwd: string, info: string): P
 		.where("login", "=", login)
 		.executeTakeFirst();
 	if (!user) return { success: false, error: "nouser" };
-	if (user.password !== await password(pwd)) return { success: false, error: "password" };
+	const check = await verifyPassword(pwd, user.password);
+	if (!check.ok) return { success: false, error: "password" };
+	// Hashes from before salting are upgraded the first time they verify.
+	if (check.legacy)
+		await db.updateTable("users").set({ password: await hashPassword(pwd) }).where("id", "=", user.id).execute();
 
 	const token = crypto.randomUUID();
 	await db
 		.insertInto("tokens")
 		.values({ user: user.id, value: token, info, expiry: "none" })
 		.execute();
-	const sessions = await getSessions(state, user.id);
+	const sessions = await getSessions(state, user.id, token);
 
 	return { success: true, value: { token, sessions } };
 }
 
-async function signoff({ db, token }: State, session: number): Promise<boolean> {
-	if (!token) return false;
-	await db.deleteFrom("tokens").where("id", "=", session).execute();
-	return true;
+/** Ends one of the caller's own sessions. */
+async function signoff({ db, user }: State, session: number): Promise<boolean> {
+	const result = await db
+		.deleteFrom("tokens")
+		.where("id", "=", session)
+		.where("user", "=", user!)
+		.executeTakeFirst();
+	return result.numDeletedRows > 0n;
 }
 
-async function changePassword({ db, token }: State, newPassword: string): Promise<boolean> {
-	if (!token) return false;
-	const user = await db
-		.selectFrom("tokens")
-		.select(["user", "value"])
-		.where("value", "=", token)
-		.executeTakeFirst();
-	if (!user) return false;
-
+/** Sets a new password and ends every session, including the current one. */
+async function changePassword({ db, user }: State, newPassword: string): Promise<boolean> {
 	await db
 		.updateTable("users")
-		.where("id", "=", user.user)
-		.set("password", await password(newPassword))
+		.where("id", "=", user!)
+		.set("password", await hashPassword(newPassword))
 		.execute();
 	await db
 		.deleteFrom("tokens")
-		.where("user", "=", user.user)
+		.where("user", "=", user!)
 		.execute();
 	return true;
 }
@@ -241,8 +244,7 @@ function postFilter(db: Kysely<Database>, tagName: string | null | undefined, su
 
 async function listPosts(state: State, page: number, search?: number | string, options: PostListOptions = {}) {
 	const { db } = state;
-	const [clearance] = await auth(state);
-	const admin = clearance === "ok";
+	const admin = state.user !== undefined;
 	const filter = postFilter(db, await resolveSearch(db, search), admin && options.suggested === true);
 
 	const countRow = await db
@@ -342,89 +344,138 @@ async function recalculateCoverage(db: Kysely<Database>): Promise<CoverageSnapsh
 	return snapshot;
 }
 
+/** Trimmed, lower-cased tag name, or null when it is empty or too long. */
+function tagName(raw: string) {
+	const name = raw.trim().toLowerCase();
+	return name.length === 0 || name.length > TAG_MAX_LENGTH ? null : name;
+}
+
 type AttachError = "invalid" | "nopost";
 
+/** Admin: tags the post, creating the tag on first use. */
 async function attachTag({ db }: State, post: string, tag: string): Promise<Result<true, AttachError>> {
-	const tagSanitized = tag.trim().toLowerCase();
-	if (tagSanitized.length === 0 || tagSanitized.length > TAG_MAX_LENGTH) return { success: false, error: "invalid" };
-	// Checked up front: a new tag row must not be left behind for a post that does not exist.
-	const postRow = await db.selectFrom("posts").select("id").where("id", "=", post).executeTakeFirst();
+	const name = tagName(tag);
+	if (name === null) return { success: false, error: "invalid" };
+	return await db.transaction().execute(trx => attachWithin(trx, post, name));
+}
+
+/** The attach itself; runs inside the caller's transaction so a tag row is never left behind half-way. */
+async function attachWithin(trx: Kysely<Database>, post: string, name: string): Promise<Result<true, AttachError>> {
+	const postRow = await trx.selectFrom("posts").select("id").where("id", "=", post).executeTakeFirst();
 	if (!postRow) return { success: false, error: "nopost" };
 
-	let id = await db
-		.selectFrom("tags")
-		.select("id")
-		.where("name", "=", tagSanitized)
-		.executeTakeFirst();
-
-	if (!id) {
-		const newTag = await db
-			.insertInto("tags")
-			.values({ name: tagSanitized })
-			.executeTakeFirstOrThrow();
-		id = { id: Number(newTag.insertId) };
-	}
-	const paired = await db
-		.selectFrom("pairs")
-		.select("tag")
-		.where("post", "=", post)
-		.where("tag", "=", id.id)
-		.executeTakeFirst();
-	if (!paired)
-		await db
-			.insertInto("pairs")
-			.values({ post, tag: id.id })
-			.executeTakeFirst();
-	// A pending suggestion of the same tag is now redundant (this is also how approval works).
-	await db
-		.deleteFrom("suggestions")
-		.where("post", "=", post)
-		.where("name", "=", tagSanitized)
+	const existing = await trx.selectFrom("tags").select("id").where("name", "=", name).executeTakeFirst();
+	const tag = existing?.id ?? Number((await trx.insertInto("tags").values({ name }).executeTakeFirstOrThrow()).insertId);
+	await trx
+		.insertInto("pairs")
+		.values({ post, tag })
+		.onConflict(oc => oc.columns(["post", "tag"]).doNothing())
 		.execute();
+	// A pending suggestion of the same tag is now redundant (this is also how approval works).
+	await trx.deleteFrom("suggestions").where("post", "=", post).where("name", "=", name).execute();
 	return { success: true, value: true };
 }
 
-async function untag({ db }: State, post: string, tag: number) {
-	await db
-		.deleteFrom("pairs")
-		.where("post", "=", post)
-		.where("tag", "=", tag)
-		.execute();
-	const exists = await db
-		.selectFrom("pairs")
-		.selectAll()
-		.where("tag", "=", tag)
-		.executeTakeFirst();
-	if (!exists) {
-		await db
-			.deleteFrom("tags")
-			.where("id", "=", tag)
+/** Admin: removes the tag from the post; a tag left on no post is dropped. */
+async function untag({ db }: State, post: string, tag: number): Promise<true> {
+	await db.transaction().execute(async trx => {
+		await trx.deleteFrom("pairs").where("post", "=", post).where("tag", "=", tag).execute();
+		const used = await trx.selectFrom("pairs").select("tag").where("tag", "=", tag).executeTakeFirst();
+		if (!used) await trx.deleteFrom("tags").where("id", "=", tag).execute();
+	});
+	return true;
+}
+
+type TagError = "invalid" | "notfound" | "exists";
+type TagChange = {
+	/** posts affected */
+	posts: number,
+	/** pending suggestions renamed or dropped */
+	suggestions: number
+};
+
+/**
+ * Admin: renames a tag. If the new name already exists, `merge` folds this tag
+ * into it (posts carrying both keep one); without it that case is refused.
+ * Pending suggestions follow the name.
+ */
+async function renameTag({ db }: State, id: number, newName: string, merge: boolean): Promise<Result<TagChange & { merged: boolean }, TagError>> {
+	const name = tagName(newName);
+	if (name === null) return { success: false, error: "invalid" };
+
+	return await db.transaction().execute(async (trx): Promise<Result<TagChange & { merged: boolean }, TagError>> => {
+		const tag = await trx.selectFrom("tags").select("name").where("id", "=", id).executeTakeFirst();
+		if (!tag) return { success: false, error: "notfound" };
+		if (tag.name === name) return { success: true, value: { merged: false, posts: 0, suggestions: 0 } };
+
+		const target = await trx.selectFrom("tags").select("id").where("name", "=", name).executeTakeFirst();
+		if (target && !merge) return { success: false, error: "exists" };
+
+		const pairs = await trx
+			.selectFrom("pairs")
+			.select(sql<number>`COUNT(*)`.as("n"))
+			.where("tag", "=", id)
+			.executeTakeFirstOrThrow();
+		let kept = id;
+		if (target) {
+			kept = target.id;
+			await trx
+				.updateTable("pairs")
+				.set({ tag: target.id })
+				.where("tag", "=", id)
+				.where("post", "not in", trx.selectFrom("pairs as q").select("q.post").where("q.tag", "=", target.id))
+				.execute();
+			await trx.deleteFrom("pairs").where("tag", "=", id).execute(); // the posts that had both
+			await trx.deleteFrom("tags").where("id", "=", id).execute();
+		} else {
+			await trx.updateTable("tags").set({ name }).where("id", "=", id).execute();
+		}
+
+		// Suggestions of the old name move over, except where the post now has the tag
+		// or already has the new name suggested; those would be duplicates.
+		await trx
+			.deleteFrom("suggestions")
+			.where("name", "=", tag.name)
+			.where(eb => eb.or([
+				eb("post", "in", trx.selectFrom("pairs").select("post").where("tag", "=", kept)),
+				eb("post", "in", trx.selectFrom("suggestions as o").select("o.post").where("o.name", "=", name))
+			]))
 			.execute();
-	}
+		const moved = await trx.updateTable("suggestions").set({ name }).where("name", "=", tag.name).executeTakeFirst();
+
+		return { success: true, value: { merged: target !== undefined, posts: pairs.n, suggestions: Number(moved.numUpdatedRows) } };
+	});
+}
+
+/** Admin: removes the tag from every post, along with pending suggestions of the same name. */
+async function deleteTag({ db }: State, id: number): Promise<Result<TagChange, TagError>> {
+	return await db.transaction().execute(async (trx): Promise<Result<TagChange, TagError>> => {
+		const tag = await trx.selectFrom("tags").select("name").where("id", "=", id).executeTakeFirst();
+		if (!tag) return { success: false, error: "notfound" };
+
+		const pairs = await trx.deleteFrom("pairs").where("tag", "=", id).executeTakeFirst();
+		await trx.deleteFrom("tags").where("id", "=", id).execute();
+		const suggestions = await trx.deleteFrom("suggestions").where("name", "=", tag.name).executeTakeFirst();
+		// Whole pages may have lost their only tag, so the shared chart is refreshed if there is one.
+		if (await getMeta(trx, COVERAGE_KEY) !== null) await recalculateCoverage(trx);
+
+		return { success: true, value: { posts: Number(pairs.numDeletedRows), suggestions: Number(suggestions.numDeletedRows) } };
+	});
 }
 
 async function feedPost({ db }: State, caption: string, id: number, time: number, mediaCount: number) {
-	const existing = await db
-		.selectFrom("posts")
-		.selectAll()
-		.where("id", "=", `tg${id}`)
-		.executeTakeFirst();
-	if (existing) return;
-
 	const post: Post = {
 		caption,
 		id: `tg${id}`,
-		media: Array.from({length: mediaCount}).map(() => "-/-").join("\n"),
-		source: `https://t.me/memyprokotow/${id}`,
-		time: time
+		media: Array.from({ length: mediaCount }, () => "-/-").join("\n"),
+		source: `https://t.me/${config.channel}/${id}`,
+		time
 	};
-
-	await db.insertInto("posts").values(post).execute();
-}
-
-async function proxy(_: State, url: string) {
-	const response = await fetch(url);
-	return response.ok ? await response.bytes() : null;
+	await db
+		.insertInto("posts")
+		.values(post)
+		.onConflict(oc => oc.column("id").doNothing())
+		.execute();
 }
 
 // ---- tag suggestions ----
@@ -565,8 +616,8 @@ async function redeemSuggester({ db }: State, token: string): Promise<Result<{ e
 type SuggestError = "nosuggester" | "invalid" | "nopost" | "exists" | "limit" | "notfound" | "own";
 
 async function addSuggestion(state: State, post: string, tag: string): Promise<Result<{ id: number }, SuggestError>> {
-	const name = tag.trim().toLowerCase();
-	if (name.length === 0 || name.length > TAG_MAX_LENGTH) return { success: false, error: "invalid" };
+	const name = tagName(tag);
+	if (name === null) return { success: false, error: "invalid" };
 
 	const suggester = await currentSuggester(state);
 	if (!suggester) return { success: false, error: "nosuggester" };
@@ -647,8 +698,8 @@ async function approveSuggestion(state: State, id: number): Promise<Result<true,
 			.executeTakeFirst();
 		if (!suggestion) return { success: false, error: "notfound" };
 
-		// attachTag also deletes the suggestion; its votes go with it (on delete cascade).
-		return await attachTag({ ...state, db: trx }, suggestion.post, suggestion.name);
+		// The attach also deletes the suggestion; its votes go with it (on delete cascade).
+		return await attachWithin(trx, suggestion.post, suggestion.name);
 	});
 }
 

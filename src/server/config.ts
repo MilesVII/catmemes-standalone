@@ -13,6 +13,8 @@ export const config = {
 	mediaDir: path.resolve(cwd, env("MEDIA_DIR", "./data/media")),
 	publicDir: path.resolve(import.meta.dirname, "../../public"),
 	feedToken: process.env.FEED_TOKEN || null,
+	/** Public name of the Telegram channel the posts come from; links back to it. */
+	channel: env("TG_CHANNEL", "memyprokotow"),
 	cookieSecure: env("COOKIE_SECURE", "true") !== "false",
 	/** Minimum time between two publicly issued suggester tokens, site-wide. */
 	suggestCooldown: Number.parseFloat(env("SUGGEST_COOLDOWN_HOURS", "6")) * HOUR,

@@ -10,17 +10,9 @@ import { fromTemplateFirst, mudcrack, rampike, Rampike } from "rampike";
 
 const CURSED_TAGS = [ "реклама", "мерчб" ];
 
-start();
-
-async function start() {
-	components();
-	document.addEventListener("DOMContentLoaded", main);
-}
-
-function components() {
-	defineTabs();
-	definePages();
-}
+defineTabs();
+definePages();
+document.addEventListener("DOMContentLoaded", main);
 
 async function main() {
 	const pager = document.querySelector<RampikePagination>("#rp-pages");
@@ -67,18 +59,25 @@ async function resolveLegacySearch(state: State, id: number, tagsReady: Promise<
 
 function attachListeners(state: State) {
 	const tabsMain = document.querySelector<RampikeTabs>("rampike-tabs#rp-tabs-main");
-	// const tabsSide = document.querySelector<RampikeTabs>("rampike-tabs#rp-tabs-side");
 	document.querySelectorAll<HTMLElement>("[data-tab]").forEach(e => {
-		// const target = e.dataset.for === "rp-tabs-main" ? tabsMain : tabsSide;
-		const target = tabsMain;
-		e.addEventListener("click", () => target.tab = e.dataset.tab);
+		e.addEventListener("click", () => tabsMain.tab = e.dataset.tab);
 	});
 	attachDash(state, {
 		reload: firstPage => {
 			if (firstPage) state.page.pager.page = 0;
 			loadPage(state, !firstPage);
 		},
-		recalculateCoverage: () => updatePage(state, true)
+		recalculateCoverage: () => updatePage(state, true),
+		tagChanged: (from, to) => {
+			// A search for the old name follows the rename, or is dropped with the tag.
+			if (state.search === from) {
+				state.search = to;
+				document.querySelector<HTMLInputElement>("#search-bar").value = to ?? "";
+				if (to === null) state.page.pager.page = 0;
+			}
+			updateTags(state);
+			loadPage(state);
+		}
 	});
 	attachSuggest(state, {
 		rerender: () => rerenderPosts(),
@@ -316,14 +315,14 @@ function makePost(state: State, post: Post) {
 				contents: name,
 				events: {
 					"click": () => pickTag(state, name),
-					"mousedown": e => {
-						if (e.button !== 2 || !state.auth) return true;
+					// Admin: right click removes the tag from this post.
+					"contextmenu": e => {
+						if (!state.auth) return;
 						e.preventDefault();
 						untag(params.id, id).then(() => {
 							updateTags(state);
 							updatePage(state);
 						});
-						return false;
 					}
 				},
 			});

@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { Kysely, SqliteDialect, sql, type Generated } from "kysely";
 import { openSqlite } from "./sqlite.ts";
-import { password } from "./utils.ts";
+import { hashPassword } from "./utils.ts";
 
 export type Post = {
 	time: number,
@@ -83,7 +83,11 @@ export async function ensureSchema(db: Kysely<Database>) {
 		console.log("empty database, creating schema with user admin / <empty password>");
 		await migrations.create(db);
 	}
-	await sql`CREATE INDEX IF NOT EXISTS "pairs-post" ON "pairs" ("post")`.execute(db);
+	// A post carries a tag at most once. Older databases may hold duplicates
+	// from before this was enforced, so they are folded before the index is built.
+	await sql`DELETE FROM "pairs" WHERE rowid NOT IN (SELECT MIN(rowid) FROM "pairs" GROUP BY "post", "tag")`.execute(db);
+	await sql`DROP INDEX IF EXISTS "pairs-post"`.execute(db);
+	await sql`CREATE UNIQUE INDEX IF NOT EXISTS "pairs-post-tag" ON "pairs" ("post", "tag")`.execute(db);
 	await sql`CREATE INDEX IF NOT EXISTS "pairs-tag" ON "pairs" ("tag")`.execute(db);
 	// Feed order (time desc, id desc): lets a page be read without sorting every post.
 	await sql`CREATE INDEX IF NOT EXISTS "posts-order" ON "posts" ("time", "id")`.execute(db);
@@ -204,10 +208,9 @@ export const migrations: Record<string, (db: Kysely<Database>) => Promise<void>>
 			.addColumn("expiry", "text")
 			.execute();
 
-		const p = await password("");
 		await db
 			.insertInto("users")
-			.values({ login: "admin", password: p })
+			.values({ login: "admin", password: await hashPassword("") })
 			.execute();
 	}
 }

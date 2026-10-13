@@ -1,28 +1,31 @@
 import { nothrow, Result } from "./utils";
 
+/** A failure of the transport or of the session, as opposed to one the route reports itself. */
+type CallError = "unauthorized" | "network";
+
 async function api(
 	endpoint: string,
 	payload: any = {}
 ): Promise<
-	Result<any, any>
+	Result<any, CallError>
 > {
 	const sent = await nothrow(() => fetch(endpoint, { method: "POST", body: JSON.stringify(payload) }));
-	if (!sent.success) return sent; // offline, DNS, connection reset
+	if (!sent.success) return { success: false, error: "network" }; // offline, DNS, connection reset
 	const response = sent.value;
-	if (response.ok) {
-		const result = await nothrow(async () => await response.json());
-		if (!result.success) return result;
-
-		if (result.value.clearance !== "ok")
-			return {
-				success: false as const,
-				error: `unauthorized: ${result.value.clearance}`
-			};
-		return { success: true, value: result.value.result }
-	} else {
+	if (!response.ok) {
 		console.error(response);
-		return { success: false as const, error: response };
+		return { success: false, error: response.status === 401 ? "unauthorized" : "network" };
 	}
+	const result = await nothrow(async () => await response.json());
+	if (!result.success) return { success: false, error: "network" };
+	if (result.value.clearance !== "ok") return { success: false, error: "unauthorized" };
+	return { success: true, value: result.value.result };
+}
+
+/** For routes that answer with their own Result: unwraps it, mapping call failures to the same shape. */
+async function call<T, E>(endpoint: string, payload: any = {}): Promise<Result<T, E | CallError>> {
+	const result = await api(endpoint, payload);
+	return result.success ? result.value : result;
 }
 
 export type Tag = {
@@ -36,10 +39,7 @@ export type Tag = {
 }
 export async function tags() {
 	const result = await api("/api/tags");
-	if (result.success)
-		return result.value as Tag[];
-	else
-		return null;
+	return result.success ? result.value as Tag[] : null;
 }
 
 export type Suggestion = {
@@ -81,28 +81,27 @@ export type CoverageSnapshot = {
 /** `search` is a tag name; posts where it is a pending suggestion match too. */
 export async function posts(page: number, search?: string, options: PostsOptions = {}) {
 	const result = await api("/api/posts", { page, search, ...options });
-	if (result.success) {
-		const posts: Post[] = result.value.posts.map((raw: any) => ({
-			caption: raw.caption,
-			id: raw.id,
-			media: raw.media.split("\n"),
-			source: raw.source,
-			tags: JSON.parse(raw.tags)
-				.map((t: any) => ({
-					id: t.tagId,
-					name: t.tagName
-				}))
-				.filter((t: any) => t.id !== null),
-			suggestions: raw.suggestions ?? []
-		}));
-		return {
-			count: result.value.count as number,
-			posts,
-			perPage: result.value.perPage as number,
-			coverage: (result.value.coverage ?? null) as CoverageSnapshot | null
-		};
-	} else
-		return null;
+	if (!result.success) return null;
+
+	const posts: Post[] = result.value.posts.map((raw: any) => ({
+		caption: raw.caption,
+		id: raw.id,
+		media: raw.media.split("\n"),
+		source: raw.source,
+		tags: JSON.parse(raw.tags)
+			.map((t: any) => ({
+				id: t.tagId,
+				name: t.tagName
+			}))
+			.filter((t: any) => t.id !== null),
+		suggestions: raw.suggestions ?? []
+	}));
+	return {
+		count: result.value.count as number,
+		posts,
+		perPage: result.value.perPage as number,
+		coverage: (result.value.coverage ?? null) as CoverageSnapshot | null
+	};
 }
 
 export type Sessions = {
@@ -114,9 +113,10 @@ export async function vibecheck() {
 	return result.success ? result.value as Sessions : null;
 }
 
+/** The session cookie is set by the server; the answer is the session list. */
 export async function signin(login: string, password: string) {
 	const result = await api("/api/user/signin", { login, password, info: window.navigator.userAgent });
-	return result.success ? result.value.value.sessions : null; // TODO: wtf
+	return result.success ? result.value as Sessions : null;
 }
 
 export async function signout(id: number) {
@@ -127,17 +127,27 @@ export async function changePassword(newPassword: string) {
 	return await api("/api/user/change", { newPassword });
 }
 
-export type AttachError = "invalid" | "nopost" | "unauthorized" | "network";
-export async function attachTag(post: string, tag: string): Promise<Result<true, AttachError>> {
-	const result = await api("/api/post/attach", { post, tag });
-	if (result.success === true) return result;
-	const unauthorized = typeof result.error === "string" && result.error.startsWith("unauthorized");
-	return { success: false, error: unauthorized ? "unauthorized" : "network" };
-}
+export type AttachError = "invalid" | "nopost" | CallError;
+export const attachTag = (post: string, tag: string) =>
+	call<true, "invalid" | "nopost">("/api/post/attach", { post, tag });
 
 export async function untag(post: string, tag: number) {
 	return await api("/api/post/untag", { post, tag });
 }
+
+export type TagError = "invalid" | "notfound" | "exists" | CallError;
+export type TagChange = {
+	/** posts affected */
+	posts: number,
+	/** pending suggestions renamed or dropped */
+	suggestions: number
+};
+/** Admin: renames the tag; with `merge`, an existing tag of that name absorbs it. */
+export const renameTag = (tag: number, name: string, merge = false) =>
+	call<TagChange & { merged: boolean }, "invalid" | "notfound" | "exists">("/api/tag/rename", { tag, name, merge });
+/** Admin: removes the tag from every post. */
+export const deleteTag = (tag: number) =>
+	call<TagChange, "notfound">("/api/tag/delete", { tag });
 
 export type SuggestStatus = {
 	active: { expiry: number } | null,

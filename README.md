@@ -18,10 +18,10 @@ work as they are.
 ## Layout
 
 ```
-src/server/   Hono app, routes (api.ts is the worker's api.ts verbatim), node:sqlite adapter
-src/page/     frontend, copied from the worker project unchanged
+src/server/   Hono app (index.ts), route logic (api.ts), schema (db.ts), node:sqlite adapter
+src/page/     frontend, bundled by esbuild into public/index.js
 public/       index.html, styles.css, favicon.png (+ built index.js)
-scripts/      backup and restore
+scripts/      backup, restore, password reset
 deploy/       systemd unit and nginx server block
 ```
 
@@ -41,8 +41,13 @@ npm start                # http://127.0.0.1:3000
 `npm run typecheck` type-checks the server and scripts.
 
 On first start with no database the schema is created along with the user
-`admin` with an empty password (same as the worker's `create` migration).
-Sign in, then change it from the dashboard.
+`admin` with an empty password. Sign in, then change it from the dashboard.
+A forgotten password is reset from the shell, which also ends every session
+of that user:
+
+```bash
+node --env-file-if-exists=.env scripts/reset-pw.ts admin 'new password'
+```
 
 ## Ubuntu VPS deployment
 
@@ -155,6 +160,25 @@ presses "recalculate tag coverage" (`recalculateCoverage: true`), and the
 chart shows when that last happened. Until the first recalculation there is
 no chart.
 
+## Tag management
+
+Signed-in admins get a "Tags" block in the dashboard:
+
+- **Rename.** Type the tag (the field autocompletes from the tag list) and
+  the new name. If the new name is already a tag, the page asks whether to
+  merge: every post of the old tag gets the new one, posts that had both keep
+  one, and the old tag disappears. Pending suggestions of the old name are
+  renamed too, unless the post already has the new tag or the same name
+  suggested. A search for the old name follows the rename.
+- **Delete everywhere.** Removes the tag from every post and drops pending
+  suggestions of the same name, after a confirmation that shows the post
+  count. This cannot be undone, so take a backup first when in doubt. The
+  stored coverage snapshot is recomputed on the way, since whole pages may
+  have lost their only tag.
+
+Both go through `/api/tag/rename` and `/api/tag/delete`, one transaction
+each. Removing a tag from a single post is still a right click on it.
+
 ## Behaviour notes
 
 - Node's bundled SQLite is compiled with `SQLITE_DQS=0`, so string literals in
@@ -162,11 +186,17 @@ no chart.
   adjusted; D1 accepted either.
 - Media responses now carry a sniffed `content-type` and a long-lived
   `cache-control`, and missing keys answer 404 instead of an empty 200.
-- Two indexes on `pairs(post)` and `pairs(tag)` are created on startup
-  (`CREATE INDEX IF NOT EXISTS`); the D1 schema had none.
-- `/proxy` still fetches an arbitrary URL supplied by the caller, exactly as
-  before. Consider restricting it if the host should not reach internal
-  networks.
+- Indexes are created on startup (`CREATE INDEX IF NOT EXISTS`): a unique
+  one on `pairs(post, tag)` (duplicate rows from before it existed are
+  folded first), `pairs(tag)`, `posts(time, id)` for the feed order and
+  `suggestions(name)` for search and pending counts. The D1 schema had none.
+- Passwords are stored as salted scrypt hashes. Rows from the worker era hold
+  an unsalted SHA-512 digest; those still sign in and are re-hashed on the
+  first successful sign-in.
+- The worker's `/proxy` endpoint, which fetched any URL given to it, is
+  gone; nothing in the page used it.
+- `TG_CHANNEL` names the Telegram channel the feeder pulls from; it is only
+  used to build the "source" link of new posts.
 - The suggestion tables (`suggesters`, `suggestions`, `votes`, `meta`) are
   created on startup with `CREATE TABLE IF NOT EXISTS`, so existing databases
   upgrade by restarting the service.

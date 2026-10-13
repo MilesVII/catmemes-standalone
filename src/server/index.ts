@@ -5,6 +5,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -19,8 +20,8 @@ await mkdir(config.mediaDir, { recursive: true });
 
 const app = new Hono();
 
-const respond = (c: Context, status: number, body: string | Uint8Array | null = null) =>
-	c.body(body as any, status as any);
+const respond = (c: Context, status: ContentfulStatusCode, body: string | null = null) =>
+	body === null ? c.body(null, status) : c.body(body, status);
 
 // Media keys look like "<post id>-<index>"; anything else is rejected before touching the filesystem.
 const MEDIA_KEY = /^[A-Za-z0-9_.-]+$/;
@@ -58,7 +59,7 @@ app.get("/r2/:key", async c => {
 const feedAuthorized = (c: Context) =>
 	config.feedToken !== null && c.req.header("x-feed-token") === config.feedToken;
 
-app.all("/feed/r2/:key", async c => {
+app.post("/feed/r2/:key", async c => {
 	if (config.feedToken === null) return respond(c, 500, "feed token not defined");
 	if (!feedAuthorized(c)) return respond(c, 401);
 
@@ -125,20 +126,16 @@ app.post("*", async c => {
 			if (typeof params?.password !== "string") return respond(c, 400);
 			if (typeof params?.info !== "string")     return respond(c, 400);
 
-			const result = await routes[route](state, params.login, params.password, params.info);
-			if (result.clearance !== "ok") return respond(c, 401, result.clearance);
-			if (result.result?.success) {
-				const token = result.result.value.token!;
-				delete result.result.value.token;
-				setCookie(c, "auth_token", token, {
-					httpOnly: true,
-					secure: config.cookieSecure,
-					sameSite: "Strict",
-					path: "/api/"
-				});
-				return c.json(result);
-			} else
-				return respond(c, 401, result.result?.error ?? null);
+			const { result } = await routes[route](state, params.login, params.password, params.info);
+			if (!result?.success) return respond(c, 401, result?.error ?? null);
+			// The token travels only in the cookie; the body gets the session list.
+			setCookie(c, "auth_token", result.value.token, {
+				httpOnly: true,
+				secure: config.cookieSecure,
+				sameSite: "Strict",
+				path: "/api/"
+			});
+			return c.json({ clearance: "ok", result: result.value.sessions });
 		}
 		case("/api/user/signoff"): {
 			if (typeof params?.session !== "number") return respond(c, 400);
@@ -184,6 +181,19 @@ app.post("*", async c => {
 			const result = await routes[route](state, params.post, params.tag);
 			return c.json(result);
 		}
+		case("/api/tag/rename"): {
+			if (typeof params?.tag !== "number")  return respond(c, 400);
+			if (typeof params?.name !== "string") return respond(c, 400);
+
+			const result = await routes[route](state, params.tag, params.name, params.merge === true);
+			return c.json(result);
+		}
+		case("/api/tag/delete"): {
+			if (typeof params?.tag !== "number") return respond(c, 400);
+
+			const result = await routes[route](state, params.tag);
+			return c.json(result);
+		}
 		case("/feed/post"): {
 			if (config.feedToken === null) return respond(c, 500, "feed token not defined");
 			if (!feedAuthorized(c)) return respond(c, 401);
@@ -194,12 +204,6 @@ app.post("*", async c => {
 
 			await routes[route](state, params.caption, params.id, params.time, params.mediaCount);
 			return respond(c, 200);
-		}
-		case("/proxy"): {
-			if (typeof params?.url !== "string") return respond(c, 400);
-
-			const result = await routes[route](state, params.url);
-			return respond(c, 200, result.result);
 		}
 		case("/api/suggest/status"): {
 			const result = await routes[route](state);
@@ -260,12 +264,8 @@ app.onError((err, c) => {
 	return respond(c, 500);
 });
 
-function pickRoute(pathname: string): (keyof typeof routes) | null {
-	if (!Object.keys(routes).includes(pathname)) {
-		return null;
-	}
-	return pathname as keyof typeof routes;
-}
+const pickRoute = (pathname: string): (keyof typeof routes) | null =>
+	Object.hasOwn(routes, pathname) ? pathname as keyof typeof routes : null;
 
 serve({ fetch: app.fetch, hostname: config.host, port: config.port }, info => {
 	console.log(`catmemes listening on http://${info.address}:${info.port}`);
