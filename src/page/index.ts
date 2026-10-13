@@ -8,6 +8,8 @@ import { renderCoverage } from "./coverage";
 import { hashToState, takeSuggestToken, updateURL } from "./url";
 import { fromTemplateFirst, mudcrack, rampike, Rampike } from "rampike";
 
+const CURSED_TAGS = [ "реклама", "мерчб" ];
+
 start();
 
 async function start() {
@@ -307,8 +309,8 @@ function makePost(state: State, post: Post) {
 
 		tags.innerHTML = "";
 		tags.hidden = params.tags.length === 0 && params.suggestions.length === 0;
-		tags.append(...params.tags.map(({ name, id }) =>
-			mudcrack({
+		tags.append(...params.tags.map(({ name, id }) => {
+			const e = mudcrack({
 				tagName: "div",
 				className: "tag",
 				contents: name,
@@ -323,9 +325,12 @@ function makePost(state: State, post: Post) {
 						});
 						return false;
 					}
-				}
-			})
-		));
+				},
+			});
+			if (CURSED_TAGS.includes(name)) e.dataset.cursed = "true";
+			return e;
+		}));
+
 		tags.append(...params.suggestions.map(s => suggestionChip(state, params, s)));
 
 		adder.hidden = !state.auth && !state.suggesting;

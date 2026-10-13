@@ -176,6 +176,19 @@ a, a:visited {
 	display: flex;
 	flex-flow: column nowrap;
 }
+.post:has([data-cursed]) {
+	--s0: 0.2;
+	--s1: 0.4;
+	--striped: repeating-linear-gradient(
+		-45deg,
+		rgba(0, 0, 0, var(--s0)),
+		rgba(0, 0, 0, var(--s0)) 4px,
+		rgba(0, 0, 0, var(--s1)) 4px,
+		rgba(0, 0, 0, var(--s1)) 8px
+	);
+	-webkit-mask-image: var(--striped); 
+	mask-image: var(--striped);
+}
 .post img {
 	border-radius: var(--radius-card);
 }
