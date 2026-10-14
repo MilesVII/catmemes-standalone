@@ -135,13 +135,14 @@ unset to disable them.
    The string is full access to that account, so use a throwaway account.
    Reading a public channel needs nothing special.
 3. Put `TG_API_ID`, `TG_API_HASH` and `TG_SESSION` into `.env` on the server.
-4. Install the timer, which runs the import every 30 minutes as the service user:
+4. Install the timer, which runs the import daily at 05:00 as the service user:
 
    ```bash
    sudo cp deploy/catmemes-fetch.service deploy/catmemes-fetch.timer /etc/systemd/system/
    sudo systemctl daemon-reload
    sudo systemctl enable --now catmemes-fetch.timer
    sudo systemctl start catmemes-fetch.service    # one run right now
+   systemctl list-timers catmemes-fetch.timer     # when the next run is
    journalctl -u catmemes-fetch -n 50
    ```
 
