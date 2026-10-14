@@ -13,13 +13,16 @@
 		"watch": "esbuild src/page/index.ts --bundle --sourcemap --watch --outfile=public/index.js",
 		"typecheck": "tsc --noEmit -p tsconfig.json && tsc -p src/page/tsconfig.json",
 		"backup": "node --env-file-if-exists=.env scripts/backup.ts",
-		"restore": "node --env-file-if-exists=.env scripts/restore.ts"
+		"restore": "node --env-file-if-exists=.env scripts/restore.ts",
+		"fetch": "node --env-file-if-exists=.env scripts/fetch-posts.ts",
+		"tg-login": "node --env-file-if-exists=.env scripts/tg-login.ts"
 	},
 	"dependencies": {
 		"@hono/node-server": "^1.19.0",
 		"hono": "^4.9.0",
 		"kysely": "^0.28.5",
-		"rampike": "^0.0.13"
+		"rampike": "^0.0.14",
+		"telegram": "^2.26.22"
 	},
 	"devDependencies": {
 		"@types/node": "^24.0.0",

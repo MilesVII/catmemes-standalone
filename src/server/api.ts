@@ -318,8 +318,8 @@ async function storedCoverage(db: Kysely<Database>): Promise<CoverageSnapshot | 
 	}
 }
 
-/** Computed only when an admin asks for it; everyone else gets the stored snapshot. */
-async function recalculateCoverage(db: Kysely<Database>): Promise<CoverageSnapshot> {
+/** Computed when an admin asks for it or the importer adds posts; everyone else gets the stored snapshot. */
+export async function recalculateCoverage(db: Kysely<Database>): Promise<CoverageSnapshot> {
 	const rows = await db
 		.with("ordered", qc => qc
 			.selectFrom("posts")
@@ -463,19 +463,26 @@ async function deleteTag({ db }: State, id: number): Promise<Result<TagChange, T
 	});
 }
 
-async function feedPost({ db }: State, caption: string, id: number, time: number, mediaCount: number) {
-	const post: Post = {
-		caption,
-		id: `tg${id}`,
-		media: Array.from({ length: mediaCount }, () => "-/-").join("\n"),
-		source: `https://t.me/${config.channel}/${id}`,
-		time
+/** Stores a channel post unless it is already known; `time` is unix seconds. Returns whether a row was written. */
+export async function storePost(db: Kysely<Database>, post: { id: number, caption: string, time: number, mediaCount: number }) {
+	const row: Post = {
+		id: `tg${post.id}`,
+		caption: post.caption,
+		time: post.time,
+		// One placeholder per media file; the files themselves live in the media directory as "<post id>-<index>".
+		media: Array.from({ length: post.mediaCount }, () => "-/-").join("\n"),
+		source: `https://t.me/${config.channel}/${post.id}`
 	};
-	await db
+	const result = await db
 		.insertInto("posts")
-		.values(post)
+		.values(row)
 		.onConflict(oc => oc.column("id").doNothing())
-		.execute();
+		.executeTakeFirst();
+	return (result.numInsertedOrUpdatedRows ?? 0n) > 0n;
+}
+
+async function feedPost({ db }: State, caption: string, id: number, time: number, mediaCount: number) {
+	await storePost(db, { id, caption, time, mediaCount });
 }
 
 // ---- tag suggestions ----

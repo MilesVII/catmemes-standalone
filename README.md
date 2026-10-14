@@ -21,8 +21,8 @@ work as they are.
 src/server/   Hono app (index.ts), route logic (api.ts), schema (db.ts), node:sqlite adapter
 src/page/     frontend, bundled by esbuild into public/index.js
 public/       index.html, styles.css, favicon.png (+ built index.js)
-scripts/      backup, restore, password reset
-deploy/       systemd unit and nginx server block
+scripts/      backup, restore, password reset, Telegram importer
+deploy/       systemd units (server, import timer) and nginx server block
 ```
 
 The server runs its TypeScript sources directly through Node's type stripping,
@@ -114,6 +114,66 @@ For nightly backups, add a line to the service user's crontab
 ```
 0 4 * * * cd /opt/catmemes && node --env-file-if-exists=.env scripts/backup.ts >> backups/backup.log 2>&1 && find backups -name 'catmemes-*.tar.gz' -mtime +14 -delete
 ```
+
+## Importing posts from Telegram
+
+`npm run fetch` (`scripts/fetch-posts.ts`) reads the channel named by
+`TG_CHANNEL` with a regular Telegram account and writes new posts straight
+into the database and the media directory. No HTTP, no feed token. The old
+`/feed/*` endpoints still exist for the external feeder; leave `FEED_TOKEN`
+unset to disable them.
+
+### One-time setup
+
+1. Create an application at https://my.telegram.org to get an api id and hash.
+2. On your own machine, sign in once and copy the printed session string:
+
+   ```bash
+   TG_API_ID=... TG_API_HASH=... node scripts/tg-login.ts
+   ```
+
+   The string is full access to that account, so use a throwaway account.
+   Reading a public channel needs nothing special.
+3. Put `TG_API_ID`, `TG_API_HASH` and `TG_SESSION` into `.env` on the server.
+4. Install the timer, which runs the import every 30 minutes as the service user:
+
+   ```bash
+   sudo cp deploy/catmemes-fetch.service deploy/catmemes-fetch.timer /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now catmemes-fetch.timer
+   sudo systemctl start catmemes-fetch.service    # one run right now
+   journalctl -u catmemes-fetch -n 50
+   ```
+
+`npm ci` prints warnings about skipped install scripts (`bufferutil`,
+`utf-8-validate`); those are optional native speed-ups and the importer works
+without them.
+
+### How it stays exact
+
+Telegram occasionally times out on a download. The importer is built so a
+hiccup can only delay posts, never skip them or leave media missing:
+
+- Posts are handled in id order and the run stops at the first post whose
+  media could not be fetched after three retries (3 s, 10 s, 30 s apart, 60 s
+  timeout each). The script exits 1 and the next run starts at that post.
+- A post row is written only after every one of its media files is on disk,
+  so the page never shows a post with a missing picture.
+- The cursor (highest message id fully handled) is stored in the `meta` table
+  as `tg-cursor` and only moves past posts that were stored or had nothing to
+  store (text-only and video messages are skipped, as before). On the first
+  run it is derived from the newest post in the database; if that post is an
+  album, the cursor is placed after the album's last message so it is not
+  imported again.
+- An album arrives as several messages. A post is imported once its messages
+  are at least two minutes old and it does not touch the end of a full batch
+  of 100, where the rest of it may still be beyond the window.
+- When anything was imported, the tag coverage snapshot is recomputed, since
+  new posts shift every page.
+
+Media is saved as the channel's 800 px rendition under
+`tg<message id>-<index>`, like the old feeder did; converting to WebP is left
+to your own script.
 
 ## Tag suggestions
 

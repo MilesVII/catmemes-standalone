@@ -1,0 +1,18 @@
+[Unit]
+Description=catmemes: import new posts from Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=catmemes
+Group=catmemes
+WorkingDirectory=/opt/catmemes
+EnvironmentFile=/opt/catmemes/.env
+ExecStart=/usr/bin/node scripts/fetch-posts.ts
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/opt/catmemes/data
