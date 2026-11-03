@@ -141,6 +141,11 @@ a, a:visited {
 	cursor: progress;
 }
 
+/* sign-in and password forms: their fields lay out as if the form were not there */
+.dashboard form {
+	display: contents;
+}
+
 .side {
 	display: flex;
 	flex-flow: column nowrap;

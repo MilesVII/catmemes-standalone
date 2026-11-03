@@ -176,6 +176,38 @@ Media is saved as the channel's 800 px rendition under
 `tg<message id>-<index>`, like the old feeder did; converting to WebP is left
 to your own script.
 
+Only one script uses the Telegram session at a time: two connections with
+the same session make Telegram revoke it, and you would have to sign in
+again. A lock file next to the database (`gatos.db.tg-lock`) holds the
+process id; a second script exits with a message while that process runs.
+
+### Fetching broken pictures again
+
+`npm run refetch-media` finds stored channel posts whose picture files are
+missing, empty or cut short (a JPEG without its end marker, as left by an
+interrupted download in the old feeder) and downloads them again with the
+same credentials:
+
+```bash
+sudo -u catmemes npm run refetch-media -- --dry-run     # list them, no Telegram
+sudo -u catmemes npm run refetch-media                  # fetch them all
+sudo -u catmemes npm run refetch-media -- tg2432 5120   # just these posts
+```
+
+- Picture `i` of a post is the `i`-th photo of its album in message order,
+  the same as the importer stores it.
+- Posts named on the command line are checked against the channel even when
+  their files look fine. If the channel's album has more photos than the
+  post lists, the rest are downloaded and added, unless another stored post
+  already holds those messages.
+- Posts gone from the channel, and posts listing more pictures than the
+  channel now has, are reported and left alone.
+- A download that fails after retries is reported and the run carries on;
+  the script exits 1 and running it again retries what is still broken.
+- Browsers cache pictures for a year, so someone who already saw a cut-short
+  picture keeps seeing it until their cache drops it. Missing pictures were
+  never cached and show up at once.
+
 ## Search by picture contents
 
 The search bar on the posts tab searches the text found in the pictures and

@@ -15,6 +15,7 @@
 		"backup": "node --env-file-if-exists=.env scripts/backup.ts",
 		"restore": "node --env-file-if-exists=.env scripts/restore.ts",
 		"fetch": "node --env-file-if-exists=.env scripts/fetch-posts.ts",
+		"refetch-media": "node --env-file-if-exists=.env scripts/refetch-media.ts",
 		"tg-login": "node --env-file-if-exists=.env scripts/tg-login.ts",
 		"import-transcripts": "node --env-file-if-exists=.env scripts/import-transcripts.ts"
 	},

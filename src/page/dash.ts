@@ -25,10 +25,11 @@ export function attachDash(state: State, { reload, recalculateCoverage, tagChang
 	const vibecheckButton = document.querySelector<HTMLButtonElement>("#dash-check");
 	const loginField =      document.querySelector<HTMLInputElement>("#dash-login");
 	const passwordField =   document.querySelector<HTMLInputElement>("#dash-pass");
+	const signinForm =      document.querySelector<HTMLFormElement>("#dash-signin-form");
 	const signinButton =    document.querySelector<HTMLButtonElement>("#dash-signin");
 	const sessionList =     document.querySelector<HTMLDivElement>(".dash-session-list");
 	const changeField =     document.querySelector<HTMLInputElement>("#dash-change-field");
-	const changeButton =    document.querySelector<HTMLButtonElement>("#dash-change-button");
+	const changeForm =      document.querySelector<HTMLFormElement>("#dash-change-form");
 	const suggestedButton = document.querySelector<HTMLButtonElement>("#dash-suggested");
 	const coverageButton =  document.querySelector<HTMLButtonElement>("#dash-coverage");
 	const issueButton =     document.querySelector<HTMLButtonElement>("#dash-issue");
@@ -66,14 +67,21 @@ export function attachDash(state: State, { reload, recalculateCoverage, tagChang
 		if (vibe) authorized(vibe);
 		else dashTabs.tab = "signin";
 	});
-	signinButton.addEventListener("click", async () => {
+	// Real forms, so Enter submits and password managers recognise the fields.
+	signinForm.addEventListener("submit", async e => {
+		e.preventDefault();
+		signinButton.disabled = true;
 		const result = await signin(loginField.value, passwordField.value);
+		signinButton.disabled = false;
 		if (!result) return;
+		passwordField.value = "";
 		authorized(result);
 	});
 
-	changeButton.addEventListener("click", () => {
+	changeForm.addEventListener("submit", e => {
+		e.preventDefault();
 		changePassword(changeField.value).then(() => dashTabs.tab = "signin");
+		changeField.value = "";
 		state.auth = false;
 		state.suggestedOnly = false;
 		suggestedButton.removeAttribute("data-active");

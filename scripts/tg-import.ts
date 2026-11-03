@@ -13,11 +13,12 @@
  *   `settleSeconds` and it does not touch the end of a full batch, where the
  *   rest of it may still be beyond the window.
  */
-import { existsSync, mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { sql, type Kysely } from "kysely";
 import { getMeta, setMeta, type Database } from "../src/server/db.ts";
 import { recalculateCoverage, storePost } from "../src/server/api.ts";
+import { linkTranscripts } from "../src/server/transcripts.ts";
 
 export type Message<P> = {
 	id: number,
@@ -35,6 +36,8 @@ export type Source<P> = {
 	after(after: number, limit: number): Promise<Message<P>[]>,
 	/** One message by id, or null if it is gone. */
 	byId(id: number): Promise<Message<P> | null>,
+	/** Messages by id, in the order asked; null for the ones that are gone. */
+	byIds(ids: number[]): Promise<(Message<P> | null)[]>,
 	download(photo: P): Promise<Uint8Array>
 };
 
@@ -131,6 +134,13 @@ async function fetchPhoto<P>(source: Source<P>, photo: P, label: string, opts: I
 	}
 }
 
+/** Writes a media file whole or not at all: a reader never sees a half-written one. */
+function writeMedia(mediaDir: string, key: string, bytes: Uint8Array) {
+	const part = path.join(mediaDir, `.${key}.part`);
+	writeFileSync(part, bytes);
+	renameSync(part, path.join(mediaDir, key));
+}
+
 /** Fetches the post's media, writes it, then the row. False if any download failed; nothing is written then. */
 async function importPost<P>(db: Kysely<Database>, source: Source<P>, mediaDir: string, draft: Draft<P>, opts: ImportOptions) {
 	const pending: { key: string, bytes: Uint8Array }[] = [];
@@ -142,11 +152,7 @@ async function importPost<P>(db: Kysely<Database>, source: Source<P>, mediaDir: 
 		if (bytes === null) return false;
 		pending.push({ key, bytes });
 	}
-	for (const { key, bytes } of pending) {
-		const part = path.join(mediaDir, `.${key}.part`);
-		writeFileSync(part, bytes);
-		renameSync(part, path.join(mediaDir, key));
-	}
+	for (const { key, bytes } of pending) writeMedia(mediaDir, key, bytes);
 	await storePost(db, { id: draft.id, caption: draft.text, time: draft.date, mediaCount: draft.photos.length, lastMessage: draft.lastId });
 	return true;
 }
@@ -212,4 +218,166 @@ export async function importPosts<P>(db: Kysely<Database>, source: Source<P>, me
 
 	if (imported > 0) await recalculateCoverage(db);
 	return { imported, failed };
+}
+
+/** Why a stored post's media file has to be fetched again. */
+export type MediaProblem = "missing" | "empty" | "truncated";
+
+export type MediaGap = {
+	/** post id, i.e. the message id of its first picture */
+	id: number,
+	/** pictures the post row lists */
+	count: number,
+	broken: { index: number, problem: MediaProblem }[]
+};
+
+export type RefetchReport = {
+	/** files written */
+	written: number,
+	/** posts whose picture count was raised to match the channel */
+	extended: number[],
+	/** posts with a download that failed after retries; running again retries them */
+	failed: number[],
+	/** posts whose first message is gone from the channel */
+	gone: number[],
+	/** posts listing more pictures than the channel has now; left alone, as the order is unknown */
+	mismatched: number[]
+};
+
+/**
+ * Checks one media file. A JPEG has to end with its end-of-image marker; one
+ * that does not was cut off mid-download and shows half grey.
+ */
+export function mediaProblem(file: string): MediaProblem | null {
+	let size: number;
+	try {
+		size = statSync(file).size;
+	} catch {
+		return "missing";
+	}
+	if (size === 0) return "empty";
+	const fd = openSync(file, "r");
+	try {
+		const head = Buffer.alloc(2);
+		const tail = Buffer.alloc(2);
+		readSync(fd, head, 0, 2, 0);
+		readSync(fd, tail, 0, 2, Math.max(0, size - 2));
+		const jpeg = head[0] === 0xff && head[1] === 0xd8;
+		return jpeg && !(tail[0] === 0xff && tail[1] === 0xd9) ? "truncated" : null;
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/**
+ * Channel posts with media files missing, empty or cut short. With `only`,
+ * just those posts, each listed even when its files are fine, so it is still
+ * checked against the channel.
+ */
+export async function findMediaGaps(db: Kysely<Database>, mediaDir: string, only: number[] | null = null): Promise<MediaGap[]> {
+	let query = db.selectFrom("posts").select(["id", "media"]).where("id", "like", "tg%");
+	if (only !== null) query = query.where("id", "in", only.length > 0 ? only.map(id => `tg${id}`) : [""]);
+	const gaps: MediaGap[] = [];
+	for (const row of await query.execute()) {
+		const id = Number(row.id.slice(2));
+		if (!Number.isSafeInteger(id)) continue;
+		const count = row.media === "" ? 0 : row.media.split("\n").length;
+		const broken: MediaGap["broken"] = [];
+		for (let index = 0; index < count; index++) {
+			const problem = mediaProblem(path.join(mediaDir, `tg${id}-${index}`));
+			if (problem !== null) broken.push({ index, problem });
+		}
+		if (broken.length > 0 || only !== null) gaps.push({ id, count, broken });
+	}
+	return gaps.sort((a, b) => a.id - b.id);
+}
+
+/**
+ * Fetches the broken media of stored posts from the channel again. A post's
+ * pictures are its album's photos in message order, so index i is the i-th
+ * photo. When the channel has more photos than the post lists, the missing
+ * ones are added, unless a later stored post already covers those messages.
+ * A failed download does not stop the run; the post is reported and a later
+ * run tries it again.
+ */
+export async function refetchMedia<P>(db: Kysely<Database>, source: Source<P>, mediaDir: string, gaps: MediaGap[], options: Partial<ImportOptions> = {}): Promise<RefetchReport> {
+	const opts = { ...DEFAULTS, ...options };
+	mkdirSync(mediaDir, { recursive: true });
+	const report: RefetchReport = { written: 0, extended: [], failed: [], gone: [], mismatched: [] };
+
+	// Ten posts per round: an album spans at most ten messages, so 100 ids per lookup.
+	for (let start = 0; start < gaps.length; start += 10) {
+		const round = gaps.slice(start, start + 10);
+		const ids = [...new Set(round.flatMap(gap => Array.from({ length: ALBUM_MAX }, (_, i) => gap.id + i)))];
+		const messages = new Map<number, Message<P>>();
+		for (const m of await source.byIds(ids)) if (m) messages.set(m.id, m);
+
+		for (const gap of round) {
+			const label = `post ${gap.id}`;
+			const first = messages.get(gap.id);
+			if (!first) {
+				opts.log(`${label}: gone from the channel`);
+				report.gone.push(gap.id);
+				continue;
+			}
+			const members = first.groupedId === null
+				? [first]
+				: [...messages.values()]
+					.filter(m => m.groupedId === first.groupedId && m.id >= gap.id && m.id < gap.id + ALBUM_MAX)
+					.sort((a, b) => a.id - b.id);
+			const photos = members.flatMap(m => m.photo === null ? [] : [m.photo]);
+			if (photos.length < gap.count) {
+				opts.log(`${label}: the channel has ${photos.length} picture(s), the post lists ${gap.count}; left alone`);
+				report.mismatched.push(gap.id);
+				continue;
+			}
+
+			const wanted = gap.broken.map(b => b.index);
+			let extend = false;
+			if (photos.length > gap.count) {
+				const lastId = members[members.length - 1].id;
+				const overlap = lastId === gap.id ? undefined : await db.selectFrom("posts").select("id")
+					.where("id", "in", Array.from({ length: lastId - gap.id }, (_, i) => `tg${gap.id + 1 + i}`))
+					.executeTakeFirst();
+				if (overlap) {
+					opts.log(`${label}: the channel has ${photos.length} picture(s), the post lists ${gap.count}, but ${overlap.id} holds the rest; left at ${gap.count}`);
+				} else {
+					extend = true;
+					for (let index = gap.count; index < photos.length; index++) wanted.push(index);
+				}
+			}
+			if (wanted.length === 0) {
+				opts.log(`${label}: all ${gap.count} picture(s) in place`);
+				continue;
+			}
+
+			let complete = true;
+			for (const index of wanted) {
+				const key = `tg${gap.id}-${index}`;
+				const bytes = await fetchPhoto(source, photos[index], key, opts);
+				if (bytes === null) {
+					complete = false;
+					continue;
+				}
+				writeMedia(mediaDir, key, bytes);
+				report.written++;
+				const problem = mediaProblem(path.join(mediaDir, key));
+				opts.log(`${key}: written, ${bytes.length} bytes${problem ? ` (still ${problem})` : ""}`);
+			}
+			if (!complete) {
+				report.failed.push(gap.id);
+				continue;
+			}
+			if (extend) {
+				await db.updateTable("posts")
+					.set({ media: Array.from({ length: photos.length }, () => "-/-").join("\n") })
+					.where("id", "=", `tg${gap.id}`)
+					.execute();
+				await linkTranscripts(db, gap.id, members[members.length - 1].id);
+				opts.log(`${label}: now lists ${photos.length} picture(s) instead of ${gap.count}`);
+				report.extended.push(gap.id);
+			}
+		}
+	}
+	return report;
 }

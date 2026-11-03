@@ -35,14 +35,18 @@
 						<div id="suggest-info" class="dash-note" hidden></div>
 					</rampike-tab>
 					<rampike-tab key="signin">
-						<input type="text" id="dash-login" placeholder="login"></input>
-						<input type="password" id="dash-pass" placeholder="password"></input>
-						<button id="dash-signin" class="wide butt">sign in</button>
+						<form id="dash-signin-form">
+							<input type="text" id="dash-login" name="username" autocomplete="username" placeholder="login" required></input>
+							<input type="password" id="dash-pass" name="password" autocomplete="current-password" placeholder="password" required></input>
+							<button type="submit" id="dash-signin" class="wide butt">sign in</button>
+						</form>
 					</rampike-tab>
 					<rampike-tab key="admin">
 						<div>Change password</div>
-						<input type="password" id="dash-change-field" placeholder="new password"></input>
-						<button id="dash-change-button" class="wide butt">change password</button>
+						<form id="dash-change-form">
+							<input type="password" id="dash-change-field" name="new-password" autocomplete="new-password" placeholder="new password" required></input>
+							<button type="submit" id="dash-change-button" class="wide butt">change password</button>
+						</form>
 						<div>Session list</div>
 						<div class="dash-session-list"></div>
 						<div>Suggestions</div>
