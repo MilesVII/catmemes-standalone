@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, open, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -12,6 +12,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { config } from "./config.ts";
 import { connect, ensureSchema, metaValue } from "./db.ts";
 import { routes, type State } from "./api.ts";
+import { TRANSCRIPT_LIMITS } from "./transcripts.ts";
 
 const db = connect(config.dbPath);
 await ensureSchema(db);
@@ -56,8 +57,16 @@ app.get("/r2/:key", async c => {
 	return c.body(Readable.toWeb(createReadStream(file)) as ReadableStream);
 });
 
-const feedAuthorized = (c: Context) =>
-	config.feedToken !== null && c.req.header("x-feed-token") === config.feedToken;
+/** Constant-time comparison of a shared secret; false when the secret is not configured. */
+function secretMatches(given: string | undefined, secret: string | null) {
+	if (secret === null || given === undefined) return false;
+	const digest = (s: string) => createHash("sha256").update(s).digest();
+	return timingSafeEqual(digest(given), digest(secret));
+}
+
+const feedAuthorized = (c: Context) => secretMatches(c.req.header("x-feed-token"), config.feedToken);
+
+const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every(k => typeof k === "string");
 
 app.post("/feed/r2/:key", async c => {
 	if (config.feedToken === null) return respond(c, 500, "feed token not defined");
@@ -162,6 +171,7 @@ app.post("*", async c => {
 				? params.search
 				: undefined;
 			const result = await routes[route](state, params.page, search, {
+				query: typeof params.query === "string" ? params.query.slice(0, 200) : undefined,
 				suggested: params.suggested === true,
 				recalculateCoverage: params.recalculateCoverage === true
 			});
@@ -192,6 +202,20 @@ app.post("*", async c => {
 			if (typeof params?.tag !== "number") return respond(c, 400);
 
 			const result = await routes[route](state, params.tag);
+			return c.json(result);
+		}
+		case("/api/transcript"): {
+			if (config.transcriptToken === null) return respond(c, 503, "transcript token not defined");
+			if (!secretMatches(c.req.header("x-transcript-token"), config.transcriptToken)) return respond(c, 401);
+			if (!Number.isSafeInteger(params?.message) || params.message <= 0) return respond(c, 400, "message: positive integer");
+			if (typeof params.text !== "string" || params.text.length > TRANSCRIPT_LIMITS.text)
+				return respond(c, 400, `text: string up to ${TRANSCRIPT_LIMITS.text} characters`);
+			// A list, or the transcriber's own comma-separated form.
+			const keywords: unknown = typeof params.keywords === "string" ? params.keywords.split(",") : params.keywords ?? [];
+			if (!isStringList(keywords) || keywords.length > TRANSCRIPT_LIMITS.keywords || keywords.some(k => k.length > TRANSCRIPT_LIMITS.keyword))
+				return respond(c, 400, `keywords: up to ${TRANSCRIPT_LIMITS.keywords} strings of up to ${TRANSCRIPT_LIMITS.keyword} characters`);
+
+			const { result } = await routes[route](state, { message: params.message, text: params.text, keywords });
 			return c.json(result);
 		}
 		case("/feed/post"): {
@@ -271,6 +295,7 @@ serve({ fetch: app.fetch, hostname: config.host, port: config.port }, info => {
 	console.log(`catmemes listening on http://${info.address}:${info.port}`);
 	console.log(`db: ${config.dbPath}\nmedia: ${config.mediaDir}`);
 	if (config.feedToken === null) console.warn("FEED_TOKEN is not set; /feed/* endpoints are disabled");
+	if (config.transcriptToken === null) console.warn("TRANSCRIPT_TOKEN is not set; /api/transcript is disabled");
 });
 
 const shutdown = () => { db.destroy().finally(() => process.exit(0)); };

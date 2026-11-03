@@ -21,7 +21,7 @@ work as they are.
 src/server/   Hono app (index.ts), route logic (api.ts), schema (db.ts), node:sqlite adapter
 src/page/     frontend, bundled by esbuild into public/index.js
 public/       index.html, styles.css, favicon.png (+ built index.js)
-scripts/      backup, restore, password reset, Telegram importer
+scripts/      backup, restore, password reset, Telegram importer, transcript import
 deploy/       systemd units (server, import timer) and nginx server block
 ```
 
@@ -175,6 +175,74 @@ hiccup can only delay posts, never skip them or leave media missing:
 Media is saved as the channel's 800 px rendition under
 `tg<message id>-<index>`, like the old feeder did; converting to WebP is left
 to your own script.
+
+## Search by picture contents
+
+The search bar on the posts tab searches the text found in the pictures and
+a list of keywords describing them, both produced by the transcriber bot
+(@cats_po_rzhat_bot, linked in the sidebar and credited above the results).
+Tag search moved to the tags tab: typing there narrows the tag list, Enter
+or the button lists the posts with that tag. Links look like `#q=<text>`
+and `#tag=<name>`.
+
+### Storage
+
+Transcripts live in their own table, one row per Telegram message, i.e. per
+picture. An album is one post here but several messages there, each with its
+own transcript, and the bot usually transcribes a picture before the daily
+import has fetched its post. `transcripts.post` names the post once it is
+known: when a transcript arrives for a known post, or when the importer
+stores a post (it links waiting transcripts of all the album's messages).
+
+### How matching works
+
+- Words are lower-cased, `ё` is folded to `е`, and Russian words are
+  reduced to their stem with the Snowball stemmer, so `врачом` finds
+  `врач` and `коробке` finds `коробка`. The stems go into an SQLite FTS5
+  index; results are ranked by relevance (bm25), newest first among equals.
+- A query word missing from the index is widened to words starting with it
+  and to indexed words one typo away (two for long words), so `инжинер`
+  still finds `инженер`.
+- Every word has to match. If no post has them all, the posts with most of
+  them are listed instead. Prepositions and conjunctions in a query are
+  ignored.
+- Words found on different pictures of one album count for the album.
+
+### Initial import
+
+The bot's database (`memes-<date>.db`) is imported once. It is safe to run
+while the service is up and to run again: entries are replaced, not added
+twice.
+
+```bash
+sudo -u catmemes npm run import-transcripts -- /path/to/memes-2026-11-03.db
+```
+
+It reads `channel_memes` for the channel in `TG_CHANNEL` (keywords) with the
+text of its latest `meme_ocr` pass. Manually added memes there have no
+channel post and are skipped. Pictures the archive does not have stay
+unlinked and simply never show up.
+
+### Endpoint for the bot
+
+`POST /api/transcript` adds or replaces the transcript of one message. It is
+protected by its own secret, `TRANSCRIPT_TOKEN`, sent as the
+`x-transcript-token` header; without it the endpoint answers 503.
+
+```bash
+curl -X POST https://your.domain/api/transcript \
+  -H "x-transcript-token: $TRANSCRIPT_TOKEN" -H "content-type: application/json" \
+  -d '{"message": 16859, "text": "МАМА: ОН БУДЕТ ВРАЧОМ", "keywords": ["кот", "врач"]}'
+```
+
+- `message`: the message id in the channel (an album's pictures have their own).
+- `text`: the text in the picture, up to 8000 characters; may be empty.
+- `keywords`: a list of strings, or one comma-separated string like the
+  bot's `channel_memes.tags`; optional, up to 300 of up to 200 characters.
+
+The answer is `{"post": "tg16859" | null, "replaced": true | false}`; `post`
+is null while the post has not been imported yet. Bad input answers 400 with
+a short reason, a wrong or missing token 401.
 
 ## Tag suggestions
 

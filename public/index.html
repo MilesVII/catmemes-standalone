@@ -61,7 +61,7 @@
 				</rampike-tabs>
 				<div>
 					<div>telegram-бот для поиска по транскрипциям:</div>
-					<a href="https://t.me/cats_po_rzhat_bot">@cats_po_rzhat_bot</a>
+					<a id="transcriber-link" href="https://t.me/cats_po_rzhat_bot">@cats_po_rzhat_bot</a>
 				</div>
 			</div>
 		</div>
@@ -69,10 +69,11 @@
 			<rampike-tabs id="rp-tabs-main" tab="posts">
 				<rampike-tab key="posts">
 					<div class="search-row">
-						<input type="text" id="search-bar" list="list-tags" placeholder="поиск"></input>
-						<button class="butt" id="search-button" class="wide">искатб</button>
-						<button class="butt" id="search-reset" class="wide">сброс</button>
+						<input type="search" id="search-bar" placeholder="поиск по содержимому" enterkeyhint="search"></input>
+						<button class="butt" id="search-button">искатб</button>
+						<button class="butt" id="search-reset">сброс</button>
 					</div>
+					<div class="search-status" hidden></div>
 					<rampike-pages id="rp-pages" class="tab-buttons pagination"></rampike-pages>
 					<div class="post-list"></div>
 					<section class="coverage-wrap" hidden>
@@ -89,6 +90,10 @@
 					</section>
 				</rampike-tab>
 				<rampike-tab key="tags">
+					<div class="search-row">
+						<input type="search" id="tag-filter" list="list-tags" placeholder="поиск по тегам" enterkeyhint="search"></input>
+						<button class="butt" id="tag-filter-button">искатб</button>
+					</div>
 					<div class="tags-list"></div>
 				</rampike-tab>
 			</rampike-tabs>

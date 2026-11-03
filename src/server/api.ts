@@ -2,6 +2,7 @@ import { sql, type Expression, type ExpressionBuilder, type Kysely, type SqlBool
 import { getMeta, setMeta, type Post, type Database } from "./db.ts";
 import { config } from "./config.ts";
 import { hashPassword, verifyPassword, type Result } from "./utils.ts";
+import { linkTranscripts, putTranscript, transcriptHits, transcriptMatch, type TranscriptInput } from "./transcripts.ts";
 
 const POSTS_PER_PAGE = 20;
 const TAG_MAX_LENGTH = 64;
@@ -51,6 +52,7 @@ export const routes = {
 	"/api/tag/rename"    : guarded( true, renameTag),
 	"/api/tag/delete"    : guarded( true, deleteTag),
 	"/feed/post"         : guarded(false, feedPost), // protected by feed token
+	"/api/transcript"    : guarded(false, saveTranscript), // protected by transcript token
 
 	"/api/suggest/status" : guarded(false, suggestStatus),
 	"/api/suggest/token"  : guarded(false, requestSuggester), // rate limited by the global cooldown
@@ -190,6 +192,8 @@ async function listTags({ db }: State): Promise<TagEntry[]> {
 }
 
 export type PostListOptions = {
+	/** Text search over picture transcripts; results come best match first. */
+	query?: string,
 	/** Admin only: restrict the list to posts with pending suggestions. */
 	suggested?: boolean,
 	/** Admin only: recompute the stored tag coverage snapshot before answering. */
@@ -247,23 +251,53 @@ async function listPosts(state: State, page: number, search?: number | string, o
 	const admin = state.user !== undefined;
 	const filter = postFilter(db, await resolveSearch(db, search), admin && options.suggested === true);
 
-	const countRow = await db
+	// Text search: posts whose pictures match, ranked by relevance. When no post
+	// has every word, the posts with most of them are listed instead.
+	const query = options.query?.trim() ? await transcriptMatch(db, options.query) : undefined;
+	const matching = (match: string) => db
 		.selectFrom("posts")
-		.where(filter)
+		.innerJoin(transcriptHits(match), "hits.post", "posts.id")
+		// The filter only refers to "posts"; the join does not change what it means.
+		.where(eb => filter(eb as unknown as ExpressionBuilder<Database, "posts">));
+	const countOf = (match: string) => matching(match)
 		.select(sql<number>`COUNT(*)`.as("total"))
-		.executeTakeFirst();
-	const count = countRow?.total ?? 0
+		.executeTakeFirstOrThrow()
+		.then(r => r.total);
+	let match: string | null = null;
+	let count: number;
+	if (query === undefined) {
+		const countRow = await db
+			.selectFrom("posts")
+			.where(filter)
+			.select(sql<number>`COUNT(*)`.as("total"))
+			.executeTakeFirst();
+		count = countRow?.total ?? 0;
+	} else if (query === null) {
+		count = 0;
+	} else {
+		match = query.all;
+		count = await countOf(match);
+		if (count === 0 && query.any !== null) {
+			match = query.any;
+			count = await countOf(match);
+		}
+	}
 
 	// The page is picked first (straight off the "posts-order" index) and only
 	// its posts are joined with tags; grouping before the limit would aggregate
 	// every post in the table on each request.
 	// Single-quoted key names: Node's bundled SQLite is built with SQLITE_DQS=0,
 	// so double-quoted strings are identifiers only (D1 tolerated them).
-	const rows = await db
-		.selectFrom(eb => eb
+	const pageOf = () => match === null
+		? db
 			.selectFrom("posts")
 			.where(filter)
-			.select(["posts.id", "posts.time", "posts.caption", "posts.media", "posts.source"])
+			.select(["posts.id", "posts.time", "posts.caption", "posts.media", "posts.source", sql<number>`0`.as("score")])
+		: matching(match)
+			.select(["posts.id", "posts.time", "posts.caption", "posts.media", "posts.source", "hits.score"])
+			.orderBy("hits.score");
+	const rows = query === null ? [] : await db
+		.selectFrom(eb => pageOf()
 			.orderBy("posts.time", "desc")
 			.orderBy("posts.id", "desc") // must match the ordering in recalculateCoverage
 			.limit(POSTS_PER_PAGE)
@@ -284,6 +318,7 @@ async function listPosts(state: State, page: number, search?: number | string, o
 			`.as("tags")
 		])
 		.groupBy("p.id")
+		.orderBy("p.score")
 		.orderBy("p.time", "desc")
 		.orderBy("p.id", "desc")
 		.execute();
@@ -463,8 +498,13 @@ async function deleteTag({ db }: State, id: number): Promise<Result<TagChange, T
 	});
 }
 
-/** Stores a channel post unless it is already known; `time` is unix seconds. Returns whether a row was written. */
-export async function storePost(db: Kysely<Database>, post: { id: number, caption: string, time: number, mediaCount: number }) {
+/**
+ * Stores a channel post unless it is already known; `time` is unix seconds.
+ * `lastMessage` is the id of the album's last message (default: one message
+ * per picture), so transcripts that arrived earlier can be linked.
+ * Returns whether a row was written.
+ */
+export async function storePost(db: Kysely<Database>, post: { id: number, caption: string, time: number, mediaCount: number, lastMessage?: number }) {
 	const row: Post = {
 		id: `tg${post.id}`,
 		caption: post.caption,
@@ -478,7 +518,14 @@ export async function storePost(db: Kysely<Database>, post: { id: number, captio
 		.values(row)
 		.onConflict(oc => oc.column("id").doNothing())
 		.executeTakeFirst();
-	return (result.numInsertedOrUpdatedRows ?? 0n) > 0n;
+	const stored = (result.numInsertedOrUpdatedRows ?? 0n) > 0n;
+	if (stored) await linkTranscripts(db, post.id, post.lastMessage ?? post.id + Math.max(0, post.mediaCount - 1));
+	return stored;
+}
+
+/** Transcriber bot: adds or replaces the transcript of one channel message. */
+async function saveTranscript({ db }: State, input: TranscriptInput) {
+	return await putTranscript(db, input);
 }
 
 async function feedPost({ db }: State, caption: string, id: number, time: number, mediaCount: number) {

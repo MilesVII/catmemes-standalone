@@ -23,6 +23,7 @@ async function main() {
 			pager
 		},
 		search: null,
+		query: null,
 		loading: false,
 		auth: false,
 		suggester: null,
@@ -72,7 +73,6 @@ function attachListeners(state: State) {
 			// A search for the old name follows the rename, or is dropped with the tag.
 			if (state.search === from) {
 				state.search = to;
-				document.querySelector<HTMLInputElement>("#search-bar").value = to ?? "";
 				if (to === null) state.page.pager.page = 0;
 			}
 			updateTags(state);
@@ -86,25 +86,38 @@ function attachListeners(state: State) {
 		search: name => pickTag(state, name)
 	});
 
+	// The search bar searches picture transcripts; tags are searched on the tags tab.
 	const searchBar = document.querySelector<HTMLInputElement>("input#search-bar");
-	const searchButton = document.querySelector<HTMLElement>("#search-button");
 	const searchCall = () => {
-		const term = searchBar.value.trim().toLowerCase();
-		const tag = state.tags.find(t => t.name === term);
-		if (!tag) return;
-		pickTag(state, tag.name);
+		const text = searchBar.value.trim();
+		if (!text) return;
+		state.query = text;
+		state.search = null;
+		state.page.pager.page = 0;
+		loadPage(state);
 	};
-	searchButton.addEventListener("click", searchCall);
+	document.querySelector<HTMLElement>("#search-button").addEventListener("click", searchCall);
 	searchBar.addEventListener("keydown", e => {
-		if (e.key !== "Enter") return;
-		searchCall();
+		if (e.key === "Enter") searchCall();
 	});
 	document.querySelector<HTMLElement>("#search-reset")?.addEventListener("click", () => {
 		searchBar.value = "";
 		state.page.pager.page = 0;
 		state.search = null;
+		state.query = null;
 		loadPage(state);
 	});
+
+	const tagFilter = document.querySelector<HTMLInputElement>("#tag-filter");
+	const tagCall = () => {
+		const name = tagFilter.value.trim().toLowerCase();
+		if (state.tags.some(t => t.name === name)) pickTag(state, name);
+	};
+	tagFilter.addEventListener("input", () => filterTagButtons(tagFilter.value));
+	tagFilter.addEventListener("keydown", e => {
+		if (e.key === "Enter") tagCall();
+	});
+	document.querySelector<HTMLElement>("#tag-filter-button").addEventListener("click", tagCall);
 
 	state.page.pager.addEventListener("pick", (e: CustomEvent) => {
 		state.page.pager.page = e.detail.page;
@@ -140,8 +153,7 @@ async function updateTags(state: State) {
 	}));
 
 	const buttonList = document.querySelector(".tags-list");
-	const searchBar = document.querySelector<HTMLInputElement>("#search-bar");
-	if (!buttonList || !searchBar) return;
+	if (!buttonList) return;
 	buttonList.innerHTML = "";
 	buttonList.append(...t.map(tag => {
 		// "name (5)" for approved posts, plus "+2" in the suggestion style for pending ones;
@@ -157,25 +169,56 @@ async function updateTags(state: State) {
 		return mudcrack({
 			tagName: "button",
 			className: tag.count === 0 ? "tag tag-unapproved" : "tag",
-			attributes: title ? { title } : {},
+			attributes: { ...(title ? { title } : {}), "data-name": tag.name },
 			contents,
 			events: {
-				click: () => {
-					searchBar.value = tag.name;
-					pickTag(state, tag.name);
-				}
+				click: () => pickTag(state, tag.name)
 			}
 		});
 	}));
+	filterTagButtons(document.querySelector<HTMLInputElement>("#tag-filter")?.value ?? "");
 }
 
-/** The reset button only shows while a tag is searched. */
+/** Narrows the tag list to names containing the typed text. */
+function filterTagButtons(text: string) {
+	const needle = text.trim().toLowerCase();
+	document.querySelectorAll<HTMLElement>(".tags-list > .tag").forEach(button => {
+		button.hidden = needle.length > 0 && !button.dataset.name.includes(needle);
+	});
+}
+
+/** The reset button shows while a text or a tag is searched. */
 function syncSearchControls(state: State) {
-	document.querySelector<HTMLElement>("#search-reset").hidden = state.search === null;
+	document.querySelector<HTMLElement>("#search-reset").hidden = state.search === null && state.query === null;
+}
+
+/**
+ * The line above the results: what is being searched and how much was found;
+ * a text search credits the transcriber bot (the link in the sidebar).
+ */
+function renderSearchStatus(state: State, count: number) {
+	const status = document.querySelector<HTMLElement>(".search-status");
+	if (!status) return;
+	status.innerHTML = "";
+	status.hidden = state.query === null && state.search === null;
+	if (status.hidden) return;
+
+	const found = count === 0 ? "ничего не нашлось" : `найдено постов: ${count}`;
+	if (state.query === null) {
+		status.append(`тег «${state.search}»: ${found}`);
+		return;
+	}
+	status.append(`${found} · транскрипции от `);
+	const credit = document.querySelector<HTMLAnchorElement>("#transcriber-link")?.cloneNode(true) as HTMLAnchorElement | undefined;
+	if (credit) {
+		credit.removeAttribute("id");
+		status.append(credit);
+	}
 }
 
 function fetchPage(state: State, recalculateCoverage = false) {
 	return posts(state.page.pager.page, state.search ?? undefined, {
+		query: state.query ?? undefined,
 		suggested: state.auth && state.suggestedOnly,
 		recalculateCoverage: state.auth && recalculateCoverage
 	});
@@ -187,15 +230,13 @@ type PageResult = NonNullable<Awaited<ReturnType<typeof fetchPage>>>;
 function applyPage(state: State, result: PageResult) {
 	state.page.pager.pageCount = Math.ceil(result.count / result.perPage);
 	state.page.posts = result.posts;
-	if (state.search !== null)
-		document.querySelector<HTMLInputElement>("#search-bar").value = state.search;
-	const filtered = state.search !== null || (state.auth && state.suggestedOnly);
+	document.querySelector<HTMLInputElement>("#search-bar").value = state.query ?? "";
+	renderSearchStatus(state, result.count);
+	const filtered = state.search !== null || state.query !== null || (state.auth && state.suggestedOnly);
 	renderCoverage(result.coverage, filtered ? null : state.page.pager.page, page => {
 		// The chart describes the unfiltered list, so a cell leaves any search or filter.
-		if (state.search !== null) {
-			state.search = null;
-			document.querySelector<HTMLInputElement>("#search-bar").value = "";
-		}
+		state.search = null;
+		state.query = null;
 		if (state.suggestedOnly) {
 			state.suggestedOnly = false;
 			document.querySelector<HTMLElement>("#dash-suggested")?.removeAttribute("data-active");
@@ -360,8 +401,10 @@ function makePost(state: State, post: Post) {
 	});
 }
 
+/** Lists the posts with a tag; this replaces a text search. */
 function pickTag(state: State, tag: string) {
 	state.search = tag;
+	state.query = null;
 	state.page.pager.page = 0;
 	document.body.scrollIntoView({behavior: "smooth"});
 	document.querySelector<HTMLButtonElement>(`[data-for="rp-tabs-main"][data-tab="posts"]`)?.click();

@@ -161,6 +161,31 @@ a, a:visited {
 	gap: var(--gap-list);
 }
 
+/* what the post list is showing: a text search (with credit) or a tag */
+.search-status {
+	font-size: 14px;
+	line-height: 18px;
+	opacity: .75;
+	text-align: center;
+}
+.search-status[hidden] {
+	display: none;
+}
+input[type="search"] {
+	background-color: var(--color-fore);
+	border-radius: var(--radius-button);
+	padding: var(--padding-input);
+	border: var(--line) solid transparent;
+	max-width: 100%;
+	width: 100%;
+}
+input[type="search"]:focus {
+	border-color: var(--color-acnt);
+}
+.tag[hidden] {
+	display: none;
+}
+
 .search-row {
 	display: grid;
 	grid-template-columns: auto repeat(2, min-content);

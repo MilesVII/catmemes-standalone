@@ -147,7 +147,7 @@ async function importPost<P>(db: Kysely<Database>, source: Source<P>, mediaDir: 
 		writeFileSync(part, bytes);
 		renameSync(part, path.join(mediaDir, key));
 	}
-	await storePost(db, { id: draft.id, caption: draft.text, time: draft.date, mediaCount: draft.photos.length });
+	await storePost(db, { id: draft.id, caption: draft.text, time: draft.date, mediaCount: draft.photos.length, lastMessage: draft.lastId });
 	return true;
 }
 

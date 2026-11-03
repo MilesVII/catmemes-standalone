@@ -1,6 +1,6 @@
 import { State } from "./types";
 
-function parseUrl(): Partial<{ page: string, tag: string, search: string }> {
+function parseUrl(): Partial<{ page: string, tag: string, q: string, search: string }> {
 	const hash = window.location.hash.slice(1);
 
 	const entries = hash
@@ -22,7 +22,8 @@ export function updateURL(state: State, replace = false) {
 	const url = new URL(window.location.toString());
 	url.hash = [
 		["page", state.page.pager.page],
-		["tag", state.search]
+		["tag", state.search],
+		["q", state.query]
 	]
 		.filter(([_, v]) => v)
 		.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
@@ -40,6 +41,7 @@ export function updateURL(state: State, replace = false) {
 export function hashToState(state: State): number | null {
 	const hashParams = parseUrl();
 	state.page.pager.page = hashParams.page ? parseInt(hashParams.page) : 0;
+	state.query = hashParams.q?.trim() || null;
 	if (hashParams.tag) {
 		state.search = hashParams.tag;
 		return null;

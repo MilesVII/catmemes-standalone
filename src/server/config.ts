@@ -13,6 +13,8 @@ export const config = {
 	mediaDir: path.resolve(cwd, env("MEDIA_DIR", "./data/media")),
 	publicDir: path.resolve(import.meta.dirname, "../../public"),
 	feedToken: process.env.FEED_TOKEN || null,
+	/** Shared secret for the transcriber bot (x-transcript-token header). Unset disables the endpoint. */
+	transcriptToken: process.env.TRANSCRIPT_TOKEN || null,
 	/** Public username of the Telegram channel the posts come from: used for source links and by the importer. */
 	channel: env("TG_CHANNEL", "memyprokotow"),
 	/** Telegram client credentials for scripts/fetch-posts.ts: an app from my.telegram.org and a session from scripts/tg-login.ts. */

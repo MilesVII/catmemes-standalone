@@ -65,6 +65,8 @@ export type Post = {
 	suggestions: Suggestion[]
 }
 export type PostsOptions = {
+	/** Text search over picture transcripts; best matches first. */
+	query?: string,
 	/** Admin: only posts with pending suggestions. */
 	suggested?: boolean,
 	/** Admin: recompute the tag coverage snapshot. */

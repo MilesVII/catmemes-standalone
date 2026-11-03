@@ -58,6 +58,18 @@ type Meta = {
 	key: string,
 	value: string
 }
+/** Text found in one channel picture, from the transcriber bot. See transcripts.ts. */
+type Transcript = {
+	/** Telegram message id; an album has one per picture */
+	message: number,
+	/** "tg<id>" once the post is known */
+	post: string | null,
+	text: string,
+	/** JSON array of strings */
+	keywords: string,
+	/** ms since epoch */
+	updated: number
+}
 
 export type Database = {
 	posts: Post,
@@ -68,7 +80,8 @@ export type Database = {
 	suggesters: Suggester,
 	suggestions: Suggestion,
 	votes: Vote,
-	meta: Meta
+	meta: Meta,
+	transcripts: Transcript
 }
 
 export function connect(file: string): Kysely<Database> {
@@ -139,6 +152,21 @@ export async function ensureSchema(db: Kysely<Database>) {
 		.addColumn("key", "text", c => c.primaryKey())
 		.addColumn("value", "text", c => c.notNull())
 		.execute();
+
+	await db.schema
+		.createTable("transcripts")
+		.ifNotExists()
+		.addColumn("message", "integer", c => c.primaryKey())
+		.addColumn("post", "text", c => c.references("posts.id"))
+		.addColumn("text", "text", c => c.notNull())
+		.addColumn("keywords", "text", c => c.notNull())
+		.addColumn("updated", "integer", c => c.notNull())
+		.execute();
+	await sql`CREATE INDEX IF NOT EXISTS "transcripts-post" ON "transcripts" ("post")`.execute(db);
+	// Terms are stemmed before they get here (search.ts); the tokenizer only splits on spaces.
+	// Contentless: the index is all that is needed, the text itself lives in "transcripts".
+	await sql`CREATE VIRTUAL TABLE IF NOT EXISTS transcripts_fts USING fts5(terms, content = '', contentless_delete = 1, tokenize = 'unicode61 remove_diacritics 0')`.execute(db);
+	await sql`CREATE VIRTUAL TABLE IF NOT EXISTS transcripts_vocab USING fts5vocab(transcripts_fts, row)`.execute(db);
 }
 
 /** Reads a persistent setting, creating it with `init()` on first use. */

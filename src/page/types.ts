@@ -9,6 +9,8 @@ export type State = {
 	},
 	/** Searched tag name. */
 	search: null | Tag["name"],
+	/** Text searched in picture transcripts. */
+	query: null | string,
 	loading: boolean,
 	auth: boolean,
 	/** Suggester token held by this browser, if any. */
